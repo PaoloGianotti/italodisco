@@ -82,7 +82,9 @@ p = {
 - **Sinergie**: bonus passivi quando si hanno certi combo equipaggiati
 - **Crafting**: fuse 2 oggetti sull'Anvil (TILE 4) → nuovo oggetto o backfire
 - **Abilità**: slot hotbar F1-F5, costo MP, cooldown in turni
-- **Boss**: piano fisso da getBossFloor() (default floor 5 in normal)
+- **Boss**: piano fisso da getBossFloor() — Easy:20, Normal:22, Hardcore:25
+- **Nemici**: 16 tipi + boss, progressione per piano (maxIdx = floor/2)
+- **Grafica**: emoji per entità/oggetti, tile 24px con muri 3D
 - **Salvataggio**: localStorage, tasto F5
 
 ## Controlli
