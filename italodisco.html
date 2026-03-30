@@ -1,0 +1,3541 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>ITALODISCO</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #000;
+  color: #ccc;
+  font-family: 'Courier New', monospace;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}
+#canvas { display: block; flex: 1; min-height: 0; }
+#hud {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 5px 12px;
+  background: #0a0a0a;
+  border-top: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a2a2a;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+#hud-title { color: #ff6; font-weight: bold; font-size: 15px; letter-spacing: 2px; }
+.hud-sep { color: #777; }
+#hud-keys { color: #bbb; font-size: 11px; margin-left: auto; }
+#msgbox {
+  background: #050505;
+  padding: 4px 12px;
+  font-size: 12px;
+  height: 100px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.msg { padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+  <span id="hud-title">ITALODISCO</span>
+  <span class="hud-sep">|</span>
+  <span id="hud-hp"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-mp"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-atk"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-def"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-lv"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-xp"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-floor"></span>
+  <span class="hud-sep">|</span>
+  <span id="hud-gold" style="color:#ff0"></span>
+  <span id="hud-effects" style="color:#0af"></span>
+  <span id="hud-synergies" style="color:#fa0"></span>
+  <span id="hud-poison" style="color:#f0f;display:none"> [VELENO]</span>
+  <span id="hud-hunger" style="display:none"></span>
+  <span id="hud-difficulty" style="font-size:10px;margin-left:4px"></span>
+  <span id="hud-keys">WASD: muovi | I: inv | F: abilità | G: spara/lancia | >: scala | .: attendi | ?: aiuto | F5: salva</span>
+</div>
+<div id="msgbox"></div>
+
+<script>
+// ─────────────────────────────────────────
+//  COSTANTI
+// ─────────────────────────────────────────
+const TS    = 16;          // tile size px
+const COLS  = 80;
+const ROWS  = 42;
+const FONT  = '13px "Courier New",monospace';
+const BFONT = 'bold 13px "Courier New",monospace';
+
+const TILE = { VOID:0, WALL:1, FLOOR:2, STAIRS:3, ANVIL:4 };
+
+// Palette
+const PAL = {
+  wall:'#9a9aaa', wallD:'#4a4a5a',
+  floor:'#2a2a2a', floorD:'#111',
+  stair:'#0ff', stairD:'#066',
+  bg:'#000',
+  player:'#ff0',
+  msgNew:'#fff', msgOld:'#666',
+};
+
+// ─────────────────────────────────────────
+//  AUDIO — Italo Disco synth sounds (Web Audio API)
+// ─────────────────────────────────────────
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playTone(freq, dur, type='square', vol=0.08, slide=0) {
+  const ac = getAudio();
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ac.currentTime);
+  if (slide) osc.frequency.linearRampToValueAtTime(freq+slide, ac.currentTime+dur);
+  gain.gain.setValueAtTime(vol, ac.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+dur);
+  osc.connect(gain); gain.connect(ac.destination);
+  osc.start(); osc.stop(ac.currentTime+dur);
+}
+
+// ── Jingle di benvenuto: horror-disco 8-bit ──
+let _jinglePlayed = false;
+function playTitleJingle() {
+  if (_jinglePlayed) return;
+  _jinglePlayed = true;
+  const ac = getAudio();
+  const now = ac.currentTime + 0.15;
+
+  // Suona una nota 8-bit con inviluppo
+  function n(freq, start, len, vol=0.12, type='square') {
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0, now+start);
+    g.gain.linearRampToValueAtTime(vol, now+start+0.01);
+    g.gain.setValueAtTime(vol*0.85, now+start+len*0.75);
+    g.gain.linearRampToValueAtTime(0, now+start+len);
+    o.connect(g); g.connect(ac.destination);
+    o.start(now+start); o.stop(now+start+len+0.05);
+  }
+
+  // Vibrato su una nota (tipico 8-bit NES)
+  function nv(freq, start, len, vol=0.12) {
+    const o = ac.createOscillator();
+    const lfo = ac.createOscillator();
+    const lfoGain = ac.createGain();
+    const g = ac.createGain();
+    o.type='square'; o.frequency.value=freq;
+    lfo.type='sine'; lfo.frequency.value=6;
+    lfoGain.gain.value=8;
+    lfo.connect(lfoGain); lfoGain.connect(o.frequency);
+    g.gain.setValueAtTime(0, now+start);
+    g.gain.linearRampToValueAtTime(vol, now+start+0.02);
+    g.gain.setValueAtTime(vol, now+start+len*0.8);
+    g.gain.linearRampToValueAtTime(0, now+start+len);
+    o.connect(g); g.connect(ac.destination);
+    o.start(now+start); o.stop(now+start+len+0.05);
+    lfo.start(now+start); lfo.stop(now+start+len+0.05);
+  }
+
+  // Percussione 8-bit (noise burst)
+  function kick(start) {
+    const buf = ac.createBuffer(1, ac.sampleRate*0.1, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length);
+    const src = ac.createBufferSource();
+    const g = ac.createGain();
+    const filt = ac.createBiquadFilter();
+    filt.type='lowpass'; filt.frequency.value=200;
+    src.buffer=buf;
+    g.gain.setValueAtTime(0.3, now+start);
+    g.gain.exponentialRampToValueAtTime(0.001, now+start+0.12);
+    src.connect(filt); filt.connect(g); g.connect(ac.destination);
+    src.start(now+start);
+  }
+
+  function hihat(start) {
+    const buf = ac.createBuffer(1, ac.sampleRate*0.05, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length);
+    const src = ac.createBufferSource();
+    const g = ac.createGain();
+    const filt = ac.createBiquadFilter();
+    filt.type='highpass'; filt.frequency.value=6000;
+    src.buffer=buf; g.gain.value=0.08;
+    src.connect(filt); filt.connect(g); g.connect(ac.destination);
+    src.start(now+start);
+  }
+
+  // ── Tempo: 145 BPM ──
+  const B = 60/145;     // quarto = 0.414s
+  const h = B/2;        // ottavo
+  const s = B/4;        // sedicesimo
+
+  // === FRASE 1: Intro horror — discesa cromatica (0..2B) ===
+  // "Passi nel dungeon" — Il diavolo scende le scale
+  n(440, 0,    h,   0.13); // A4
+  n(415, h,    h,   0.13); // G#4  ← semitono, inquietante!
+  n(392, B,    h,   0.13); // G4
+  n(370, B+h,  h,   0.13); // F#4  ← tritono con A → suona MALE (bene!)
+  n(349, B*2,  h,   0.11); // F4
+  n(311, B*2+h,h*1.5,0.10);// Eb4  ← ancora più dark
+
+  // Basso durante l'intro (drone spettrale)
+  n(110, 0,    B*3, 0.10, 'triangle'); // A2 drone
+  n(147, B*1.5,h,   0.08, 'sine');     // D3 (quinta)
+
+  // === FRASE 2: DISCO GROOVE! (3B..6B) ===
+  // Riff in La minore pentatonica — 8-bit bouncy
+  n(440, B*3,     s,   0.15); // A4
+  n(440, B*3+s,   s,   0.13); // A4
+  n(523, B*3+h,   h,   0.14); // C5  ← terza minore
+  n(440, B*4,     s,   0.13); // A4
+  n(392, B*4+s,   s,   0.12); // G4
+  n(440, B*4+h,   h,   0.13); // A4
+  n(523, B*5,     h,   0.14); // C5
+  n(587, B*5+h,   h,   0.14); // D5  ← tensione
+
+  // Basso disco sotto il riff (A2-E2-A2)
+  n(110, B*3,  h,   0.16, 'triangle');
+  n(165, B*3+h,h,   0.13, 'triangle'); // E3
+  n(110, B*4,  h,   0.16, 'triangle');
+  n(147, B*4+h,h,   0.13, 'triangle'); // D3
+  n(110, B*5,  B,   0.16, 'triangle');
+
+  // Ritmo disco (kick + hi-hat)
+  [B*3, B*4, B*5].forEach(t => { kick(t); kick(t+B/2); });
+  [B*3+h, B*3+h*3, B*4+h, B*4+h*3, B*5+h, B*5+h*3].forEach(t => hihat(t));
+
+  // === FRASE 3: CLIMAX — arpeggio ascendente (6B..8B) ===
+  [220,277,330,440,554,659,880].forEach((f,i) => {
+    n(f, B*6 + i*s*1.1, h, 0.10 + i*0.01);
+  });
+  // Crash sul picco!
+  nv(880, B*6+s*7.5, B*1.5, 0.18);
+  n(440, B*6+s*7.5, B*1.5, 0.15, 'sawtooth'); // spessore
+
+  // === FRASE 4: FIRMA ITALODISCO — stab synth + spooky discesa (8B..11B) ===
+  // Stab italo-disco (accordo sforzato)
+  n(440, B*8,     s,   0.18); // A4
+  n(523, B*8,     s,   0.15); // C5
+  n(659, B*8,     s,   0.12); // E5
+  n(880, B*8,     h,   0.10); // A5
+
+  // Pausa di suspense...
+  // Poi: discesa spettrale finale (come uno zombie che balla)
+  n(659, B*9,     s,   0.12); // E5
+  n(587, B*9+s,   s,   0.11); // D5
+  n(523, B*9+h,   s,   0.11); // C5
+  n(494, B*9+h+s, s,   0.10); // B4
+  n(466, B*9+h*2, s,   0.10); // Bb4  ← semitono horror!
+  n(440, B*9+h*3, h,   0.10); // A4
+
+  // Ultima nota lunga con vibrato — "ITALODISCO~"
+  nv(440, B*10, B*1.5, 0.14);
+  n(220, B*10, B*1.5, 0.12, 'triangle'); // basso
+
+  // Kick finale
+  kick(B*8); kick(B*9); kick(B*10);
+}
+
+const SFX = {
+  // Passo: mini kick disco — basso e cortissimo
+  step() {
+    playTone(90, 0.06, 'sine', 0.05, -40);
+  },
+  // Colpisci nemico: funky synth stab!
+  hit() {
+    playTone(440, 0.08, 'square', 0.07);
+    playTone(554, 0.06, 'square', 0.05); // terza maggiore
+    setTimeout(()=> playTone(660, 0.1, 'sawtooth', 0.04), 40);
+  },
+  // Vieni colpito: discesa drammatica
+  hurt() {
+    playTone(600, 0.2, 'sawtooth', 0.08, -400);
+  },
+  // Muro: boop percussivo
+  wall() {
+    playTone(200, 0.08, 'triangle', 0.06, -100);
+  },
+  // Critico: disco stab acuto
+  crit() {
+    playTone(880, 0.06, 'square', 0.06);
+    setTimeout(()=> playTone(1100, 0.1, 'square', 0.05), 50);
+    setTimeout(()=> playTone(1320, 0.08, 'sawtooth', 0.04), 100);
+  },
+  // Nemico muore: breve fanfara disco
+  kill() {
+    playTone(440, 0.1, 'square', 0.06);
+    setTimeout(()=> playTone(554, 0.1, 'square', 0.06), 80);
+    setTimeout(()=> playTone(660, 0.15, 'square', 0.06), 160);
+    setTimeout(()=> playTone(880, 0.2, 'sawtooth', 0.05), 260);
+  },
+  // Raccolta oggetto: bleep positivo
+  pickup() {
+    playTone(523, 0.06, 'sine', 0.06);
+    setTimeout(()=> playTone(784, 0.1, 'sine', 0.05), 60);
+  },
+  // Level up: mini disco jingle
+  levelup() {
+    [440,554,660,880,1100].forEach((f,i) => {
+      setTimeout(()=> playTone(f, 0.12, 'square', 0.06), i*90);
+    });
+  },
+  // Scale: suono discendente
+  stairs() {
+    playTone(600, 0.15, 'sine', 0.06, -300);
+    setTimeout(()=> playTone(300, 0.2, 'triangle', 0.05, -100), 120);
+  },
+  // Schivata: swoosh
+  dodge() {
+    playTone(1200, 0.1, 'sine', 0.04, -800);
+  },
+  // Morte: sad descending
+  death() {
+    [660,554,440,330,220].forEach((f,i) => {
+      setTimeout(()=> playTone(f, 0.25, 'sawtooth', 0.06), i*150);
+    });
+  },
+};
+
+// ─────────────────────────────────────────
+//  DEFINIZIONI NEMICI
+// ─────────────────────────────────────────
+const ENEMY_DEFS = [
+  { ch:'r', name:'Ratto',      col:'#a66', hp:10, atk:4,  def:0, xp:5,   sight:5 },
+  { ch:'k', name:'Kobold',     col:'#6a6', hp:18, atk:6,  def:1, xp:10,  sight:6 },
+  { ch:'g', name:'Goblin',     col:'#5a3', hp:26, atk:9,  def:2, xp:18,  sight:7 },
+  { ch:'O', name:'Orco',       col:'#8a0', hp:45, atk:14, def:4, xp:35,  sight:7 },
+  { ch:'T', name:'Troll',      col:'#0a6', hp:70, atk:19, def:6, xp:65,  sight:6 },
+  { ch:'V', name:'Vampiro',    col:'#a0a', hp:58, atk:17, def:5, xp:90,  sight:9 },
+  { ch:'D', name:'Drago',      col:'#f60', hp:100,atk:25, def:10,xp:200, sight:10 },
+  { id:'boss', name:'Il DJ Infernale', ch:'@', col:'#f0f', hp:120, atk:18, def:8, xp:200, gold:100, sight:15, isBoss:true },
+];
+
+function getBossFloor(){
+  if(G.difficulty==='hardcore') return 15;
+  if(G.difficulty==='normal')   return 12;
+  return 10; // easy
+}
+function isBossFloor(f){ return f===getBossFloor(); }
+function isPostBoss(f){ return f>getBossFloor(); }
+
+// ─────────────────────────────────────────
+//  DEFINIZIONI OGGETTI
+// ─────────────────────────────────────────
+const ITEM_POOL = [
+  { ch:'!', type:'potion', name:'Pozione di Cura',   col:'#f4f', effect:'heal',   power:20, weight:30 },
+  { ch:'!', type:'potion', name:'Pozione di Forza',  col:'#f4f', effect:'strkp',  power:3,  weight:15 },
+  { ch:'!', type:'potion', name:'Pozione di Veleno', col:'#f4f', effect:'poison', power:8,  weight:10 },
+  { ch:')', type:'weapon', name:'Daga',              col:'#aaf', effect:'weapon', power:2,  weight:25 },
+  { ch:')', type:'weapon', name:'Spada Corta',       col:'#aaf', effect:'weapon', power:4,  weight:20 },
+  { ch:')', type:'weapon', name:'Spada Lunga',       col:'#aaf', effect:'weapon', power:7,  weight:15 },
+  { ch:')', type:'weapon', name:'Ascia da Guerra',   col:'#aaf', effect:'weapon', power:10, weight:10 },
+  { ch:'[', type:'armor',  name:'Armatura di Cuoio', col:'#0af', effect:'armor',  power:2,  weight:25 },
+  { ch:'[', type:'armor',  name:'Cotta di Maglia',   col:'#0af', effect:'armor',  power:5,  weight:15 },
+  { ch:'[', type:'armor',  name:'Armatura a Piastre',col:'#0af', effect:'armor',  power:8,  weight:8  },
+  { ch:'$', type:'gold',   name:'Oro',               col:'#ff0', effect:'gold',   power:0,  weight:40 },
+  // Armi a distanza
+  { ch:')', type:'weapon', name:'Arco Corto',  col:'#aff', effect:'weapon', power:0, weight:10, ranged:true, range:5 },
+  { ch:')', type:'weapon', name:'Arco Lungo',  col:'#aff', effect:'weapon', power:0, weight:7,  ranged:true, range:8 },
+  { ch:')', type:'weapon', name:'Balestra',    col:'#8ff', effect:'weapon', power:0, weight:6,  ranged:true, range:6 },
+  // Munizioni
+  { ch:'/', type:'ammo', name:'Frecce',    col:'#fa0', effect:'ammo', power:4, weight:25, qty:8,  known:true },
+  { ch:'/', type:'ammo', name:'Quadrelli', col:'#f80', effect:'ammo', power:6, weight:15, qty:5,  known:true },
+  // Cibo (usato in tutte le difficoltà, vitale in Hardcore)
+  { ch:'%', type:'food', name:'Razione',      col:'#fa0', effect:'food', power:30, weight:15, known:true },
+  { ch:'%', type:'food', name:'Carne Secca',  col:'#f80', effect:'food', power:55, weight:10, known:true },
+  { ch:'%', type:'food', name:'Cibo Avariato',col:'#666', effect:'food', power:15, weight:20, known:true, rotten:true },
+  // Copricapi (^)
+  { id:'elmetto_cuoio',   name:'Elmetto di Cuoio',  ch:'^', color:'#a85', col:'#a85', type:'headgear', power:1, weight:8,  desc:'Un elmetto di cuoio consumato' },
+  { id:'elmetto_ferro',   name:'Elmetto di Ferro',  ch:'^', color:'#888', col:'#888', type:'headgear', power:3, weight:5,  desc:'Un robusto elmetto di ferro' },
+  { id:'cappello_mago',   name:'Cappello del Mago', ch:'^', color:'#84f', col:'#84f', type:'headgear', power:1, weight:4,  desc:'Amplifica la magia', magic:{mpRegen:1,intBonus:2} },
+  // Calzature (~)
+  { id:'stivali_cuoio',   name:'Stivali di Cuoio',  ch:'~', color:'#a85', col:'#a85', type:'footwear', power:1, weight:8,  desc:'Stivali di cuoio logori' },
+  { id:'stivali_ferro',   name:'Stivali di Ferro',  ch:'~', color:'#888', col:'#888', type:'footwear', power:2, weight:5,  desc:'Stivali di ferro pesanti' },
+  { id:'stivali_velocita',name:'Stivali della Velocità', ch:'~', color:'#4f8', col:'#4f8', type:'footwear', power:1, weight:4, desc:'Aumentano la destrezza', magic:{dexBonus:2,dodgeBonus:3} },
+  // Anelli (=)
+  { id:'anello_forza',    name:'Anello della Forza', ch:'=', color:'#f84', col:'#f84', type:'ring', power:0, weight:6, desc:'Aumenta la forza', magic:{strBonus:2} },
+  { id:'anello_guardia',  name:'Anello della Guardia', ch:'=', color:'#88f', col:'#88f', type:'ring', power:0, weight:6, desc:'Aumenta la difesa', magic:{defBonus:3} },
+  { id:'anello_vitale',   name:'Anello della Vita', ch:'=', color:'#f44', col:'#f44', type:'ring', power:0, weight:5, desc:'Rigenera HP', magic:{hpRegen:1} },
+  { id:'anello_arcano',   name:'Anello Arcano', ch:'=', color:'#f4f', col:'#f4f', type:'ring', power:0, weight:5, desc:'Rigenera MP', magic:{mpRegen:1,intBonus:1} },
+  { id:'anello_critico',  name:'Anello del Critico', ch:'=', color:'#ff4', col:'#ff4', type:'ring', power:0, weight:4, desc:'Aumenta i critici', magic:{critBonus:5,dexBonus:1} },
+];
+
+const RARITY = {
+  comune:     { name:'Comune',     color:'#aaa', weight:60 },
+  raro:       { name:'Raro',       color:'#48f', weight:25 },
+  leggendario:{ name:'Leggendario',color:'#f80', weight:10 },
+  unico:      { name:'Unico',      color:'#ff0', weight:4  },
+  maledetto:  { name:'Maledetto',  color:'#c0f', weight:1  }
+};
+
+function rollRarity(floorN){
+  const bonus = Math.min(floorN*2, 20);
+  const weights = [
+    {r:'comune',      w: Math.max(60-bonus,30) },
+    {r:'raro',        w: 25 + Math.floor(bonus*0.4) },
+    {r:'leggendario', w: 10 + Math.floor(bonus*0.35) },
+    {r:'unico',       w:  4 + Math.floor(bonus*0.2)  },
+    {r:'maledetto',   w:  1 + Math.floor(bonus*0.05) }
+  ];
+  const total = weights.reduce((s,e)=>s+e.w,0);
+  let r = Math.random()*total;
+  for(const e of weights){ r-=e.w; if(r<=0) return e.r; }
+  return 'comune';
+}
+
+function applyRarityBonus(item, rarityKey, floorN){
+  item.rarity = rarityKey;
+  item.rarityColor = RARITY[rarityKey].color;
+  if(rarityKey==='comune') return;
+  const mult = rarityKey==='raro' ? 1.3 : rarityKey==='leggendario' ? 1.7 : rarityKey==='unico' ? 2.2 : 1.5;
+  if(item.power) item.power = Math.round(item.power * mult);
+  item.magic = item.magic || {};
+  if(rarityKey==='raro'){
+    const props = ['hpRegen','critBonus','dodgeBonus','atkBonus','defBonus'];
+    const p = props[Math.floor(Math.random()*props.length)];
+    item.magic[p] = (item.magic[p]||0) + Math.floor(Math.random()*3)+1;
+  } else if(rarityKey==='leggendario'){
+    item.magic.atkBonus = (item.magic.atkBonus||0) + Math.floor(Math.random()*4)+2;
+    item.magic.defBonus = (item.magic.defBonus||0) + Math.floor(Math.random()*3)+1;
+    const props = ['hpRegen','critBonus','strBonus','dexBonus','intBonus'];
+    const p = props[Math.floor(Math.random()*props.length)];
+    item.magic[p] = (item.magic[p]||0) + Math.floor(Math.random()*3)+1;
+  } else if(rarityKey==='unico'){
+    item.magic.atkBonus = (item.magic.atkBonus||0) + Math.floor(Math.random()*6)+4;
+    item.magic.defBonus = (item.magic.defBonus||0) + Math.floor(Math.random()*4)+2;
+    item.magic.hpRegen  = (item.magic.hpRegen||0)  + Math.floor(Math.random()*2)+1;
+    item.magic.critBonus= (item.magic.critBonus||0) + Math.floor(Math.random()*5)+3;
+  } else if(rarityKey==='maledetto'){
+    item.magic.atkBonus = (item.magic.atkBonus||0) + Math.floor(Math.random()*8)+6;
+    item.magic.defBonus = (item.magic.defBonus||0) + Math.floor(Math.random()*5)+3;
+    item.magic.strBonus = (item.magic.strBonus||0) + Math.floor(Math.random()*3)+2;
+    item.cursed = true;
+    item.curseCharges = 10 + Math.floor(Math.random()*10);
+    item._curseBroken = false;
+  }
+}
+
+function rndItem(floorN) {
+  const total = ITEM_POOL.reduce((a,i) => a + i.weight, 0);
+  let r = Math.random() * total;
+  let it;
+  for (const item of ITEM_POOL) {
+    r -= item.weight;
+    if (r <= 0) { it = { ...item }; break; }
+  }
+  if (!it) it = { ...ITEM_POOL[0] };
+  // Only apply rarity to equipment (weapons, armor, and new slots), not potions/food/gold
+  if(it.type==='weapon'||it.type==='armor'||it.type==='headgear'||it.type==='footwear'||it.type==='ring'){
+    const rar = rollRarity(floorN||1);
+    applyRarityBonus(it, rar, floorN||1);
+  }
+  return it;
+}
+
+// ─────────────────────────────────────────
+//  SISTEMA ABILITÀ — data-driven con tag
+// ─────────────────────────────────────────
+const ABILITY_DEFS = [
+  // === FISICHE (FOR-based) ===
+  { id:'power_strike', name:'Colpo Potente', desc:'Attacco potenziato (+150% danno)',
+    tags:['fisico','mischia','attacco'], icon:'⚔',
+    cost:{mp:3}, cd:3, req:{str:3},
+    effect:{type:'melee_boost', mult:2.5} },
+  { id:'cleave', name:'Fendente', desc:'Colpisce tutti i nemici adiacenti',
+    tags:['fisico','mischia','area'], icon:'◎',
+    cost:{mp:5}, cd:5, req:{str:5},
+    effect:{type:'cleave', mult:1.2} },
+  { id:'war_cry', name:'Grido di Guerra', desc:'ATK +4 per 8 turni',
+    tags:['fisico','buff','morale'], icon:'!',
+    cost:{mp:4}, cd:10, req:{str:4},
+    effect:{type:'buff', stat:'atk', value:4, turns:8} },
+
+  // === DESTREZZA ===
+  { id:'backstab', name:'Pugnalata', desc:'Triplo danno se il nemico non ti vede',
+    tags:['fisico','furtivo','mischia'], icon:'†',
+    cost:{mp:3}, cd:4, req:{dex:4},
+    effect:{type:'backstab', mult:3} },
+  { id:'dodge_stance', name:'Postura Evasiva', desc:'Schivata +30% per 6 turni',
+    tags:['difesa','furtivo','buff'], icon:'~',
+    cost:{mp:3}, cd:8, req:{dex:3},
+    effect:{type:'buff', stat:'dodgePct', value:30, turns:6} },
+  { id:'quick_dash', name:'Scatto Rapido', desc:'Muoviti di 3 caselle in una direzione',
+    tags:['movimento','furtivo'], icon:'»',
+    cost:{mp:2}, cd:3, req:{dex:3},
+    effect:{type:'dash', dist:3} },
+
+  // === MAGIA (INT-based) ===
+  { id:'fireball', name:'Palla di Fuoco', desc:'Danno magico in area 3x3',
+    tags:['magia','fuoco','area'], icon:'✦',
+    cost:{mp:6}, cd:4, req:{int:4},
+    effect:{type:'magic_area', radius:1, base:12, element:'fuoco'} },
+  { id:'ice_shard', name:'Scheggia di Ghiaccio', desc:'Danno + rallenta nemico',
+    tags:['magia','gelo','attacco'], icon:'❄',
+    cost:{mp:4}, cd:3, req:{int:3},
+    effect:{type:'magic_bolt', base:10, status:'slow', statusTurns:3} },
+  { id:'arcane_sight', name:'Vista Arcana', desc:'Rivela tutta la mappa permanentemente',
+    tags:['magia','utilità','esplorazione'], icon:'◉',
+    cost:{mp:5}, cd:15, req:{int:5},
+    effect:{type:'reveal_map', turns:9999} },
+
+  // === VITALITÀ / CURA ===
+  { id:'heal', name:'Cura', desc:'Recupera HP (scala con VOL)',
+    tags:['cura','magia','difesa'], icon:'+',
+    cost:{mp:5}, cd:5, req:{wil:3},
+    effect:{type:'heal', base:15} },
+  { id:'iron_skin', name:'Pelle di Ferro', desc:'DEF +5 per 8 turni',
+    tags:['difesa','buff','fisico'], icon:'▪',
+    cost:{mp:4}, cd:10, req:{vit:4},
+    effect:{type:'buff', stat:'def', value:5, turns:8} },
+  { id:'regen', name:'Rigenerazione', desc:'Recupera 2 HP/turno per 10 turni',
+    tags:['cura','buff','natura'], icon:'♥',
+    cost:{mp:6}, cd:12, req:{vit:5,wil:3},
+    effect:{type:'regen', hpPerTurn:2, turns:10} },
+
+  // === VOLONTÀ ===
+  { id:'mana_surge', name:'Impulso Arcano', desc:'Recupera MP istantaneamente',
+    tags:['magia','utilità'], icon:'◆',
+    cost:{mp:0}, cd:15, req:{wil:3},
+    effect:{type:'restore_mp', base:10} },
+  { id:'fear', name:'Terrore', desc:'I nemici vicini fuggono per 5 turni',
+    tags:['magia','mente','area'], icon:'☠',
+    cost:{mp:7}, cd:12, req:{wil:4,int:3},
+    effect:{type:'fear', radius:3, turns:5} },
+];
+
+// ── Motore abilità ──
+function canUseAbility(ab) {
+  const p = G.player;
+  if (ab._cd > 0) return {ok:false, why:`${ab.name} in cooldown (${ab._cd} turni)`};
+  if (p.mp < ab.cost.mp) return {ok:false, why:'MP insufficienti'};
+  return {ok:true};
+}
+
+function useAbility(slotIdx) {
+  const allAbs = getAllHotbarAbilities();
+  const ab = allAbs[slotIdx];
+  if (!ab) return;
+  const check = canUseAbility(ab);
+  if (!check.ok) { msg(check.why, '#f44'); return; }
+  const p = G.player;
+  const eff = ab.effect;
+  p.mp -= ab.cost.mp;
+  ab._cd = ab.cd;
+  // Track playstyle from ability tags
+  const tags = ab.tags || [];
+  if (tags.some(t=>['mischia','attacco'].includes(t))) p.style.melee++;
+  if (tags.some(t=>['magia','fuoco','gelo','mente'].includes(t))) p.style.magic++;
+  if (tags.some(t=>['furtivo','movimento'].includes(t))) p.style.stealth++;
+  if (tags.some(t=>['difesa','buff'].includes(t))) p.style.defense++;
+  if (tags.some(t=>['cura','morale'].includes(t))) p.style.support++;
+
+  // Abilità che richiedono un bersaglio direzionale
+  if (['melee_boost','cleave','backstab','dash','magic_area','magic_bolt'].includes(eff.type)) {
+    G.abilityTarget = {ab, eff};
+    msg(`${ab.name}: scegli direzione (WASD/frecce)`, '#ff6');
+    return;
+  }
+
+  // Abilità ad effetto immediato
+  switch(eff.type) {
+    case 'buff':
+      addEffect(ab.name, eff.stat, eff.value, eff.turns, '#0af');
+      break;
+    case 'heal': {
+      const amount = eff.base + p.wil * 2;
+      const healed = Math.min(amount, p.maxHp - p.hp);
+      p.hp += healed;
+      msg(`${ab.name}: +${healed} HP!`, '#0f8'); SFX.pickup();
+      break;
+    }
+    case 'regen':
+      addEffect(ab.name, 'regen', eff.hpPerTurn, eff.turns, '#0f8');
+      break;
+    case 'restore_mp': {
+      const amount = eff.base + p.wil;
+      p.mp = Math.min(p.mp + amount, p.maxMp);
+      msg(`${ab.name}: +${amount} MP!`, '#48f');
+      break;
+    }
+    case 'reveal_map':
+      for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++) G.explored.add(`${x},${y}`);
+      msg("La mappa è rivelata permanentemente!",'#48f');
+      break;
+    case 'fear': {
+      let count=0;
+      for (const e of G.entities) {
+        if (Math.abs(e.x-p.x)+Math.abs(e.y-p.y)<=eff.radius && vis(e.x,e.y)) {
+          e.feared=(e.feared||0)+eff.turns; count++;
+        }
+      }
+      msg(`${ab.name}: ${count} nemici terrorizzati!`, '#a0f');
+      break;
+    }
+  }
+  msg(`Usi ${ab.name}!`, '#0af'); SFX.hit();
+  endTurn();
+}
+
+function hasAdjacentFloor(x,y) {
+  for (let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+    const nx=x+dx,ny=y+dy;
+    if (nx>=0&&nx<COLS&&ny>=0&&ny<ROWS&&G.map[ny][nx]===TILE.FLOOR) return true;
+  }
+  return false;
+}
+
+function resolveAbilityTarget(dx, dy) {
+  const t = G.abilityTarget;
+  if (!t) return false;
+  G.abilityTarget = null;
+  const p = G.player, eff = t.eff, ab = t.ab;
+
+  function refund() { p.mp+=ab.cost.mp; ab._cd=0; }
+
+  switch(eff.type) {
+    case 'melee_boost': {
+      const enemy = entityAt(p.x+dx, p.y+dy);
+      if (!enemy) { msg('Nessun nemico lì!','#f44'); refund(); return true; }
+      const d = Math.floor(dmg(p.atk, enemy.def, p.critPct) * eff.mult);
+      enemy.hp -= d;
+      msg(`${ab.name} su ${enemy.name}: ${d} danni!`, '#fa0'); SFX.crit();
+      if (enemy.hp<=0) killEnemy(enemy);
+      break;
+    }
+    case 'cleave': {
+      const targets=[];
+      for (let cy=-1;cy<=1;cy++) for(let cx=-1;cx<=1;cx++) {
+        if (!cx&&!cy) continue;
+        const e=entityAt(p.x+cx,p.y+cy); if(e) targets.push(e);
+      }
+      if (!targets.length) { msg('Nessun nemico adiacente!','#f44'); refund(); return true; }
+      for (const e of targets) {
+        const d=Math.floor(dmg(p.atk,e.def,p.critPct)*eff.mult);
+        e.hp-=d; msg(`Fendente su ${e.name}: ${d}!`,'#fa0');
+        if (e.hp<=0) killEnemy(e);
+      }
+      SFX.crit(); break;
+    }
+    case 'backstab': {
+      const enemy = entityAt(p.x+dx, p.y+dy);
+      if (!enemy) { msg('Nessun nemico lì!','#f44'); refund(); return true; }
+      const notSeen = Math.abs(enemy.x-p.x)+Math.abs(enemy.y-p.y)>enemy.sight;
+      const mult = notSeen ? eff.mult : 1.5;
+      const d = Math.floor(dmg(p.atk, enemy.def, p.critPct) * mult);
+      enemy.hp -= d;
+      msg(`${ab.name}${notSeen?' (furtivo!)':''}: ${d}!`, '#fa0'); SFX.crit();
+      if (enemy.hp<=0) killEnemy(enemy);
+      break;
+    }
+    case 'dash': {
+      let moved=0;
+      for (let i=0;i<eff.dist;i++) {
+        const nx=p.x+dx, ny=p.y+dy;
+        if (!walkable(nx,ny)||entityAt(nx,ny)) break;
+        p.x=nx; p.y=ny; moved++;
+      }
+      if (!moved) { msg('Non puoi scattare lì!','#f44'); refund(); return true; }
+      msg(`Scatti di ${moved} caselle!`, '#0ff'); SFX.dodge();
+      break;
+    }
+    case 'magic_area': {
+      const cx=p.x+dx*2, cy=p.y+dy*2; let hits=0;
+      for (let ay=-eff.radius;ay<=eff.radius;ay++) for(let ax=-eff.radius;ax<=eff.radius;ax++) {
+        const e=entityAt(cx+ax,cy+ay);
+        if (e) { const d=eff.base+p.int*2+rndInt(5); e.hp-=d; msg(`${ab.name} → ${e.name}: ${d}!`,'#f80'); hits++; if(e.hp<=0)killEnemy(e); }
+      }
+      if (!hits) msg(`${ab.name} non colpisce nessuno.`,'#888');
+      SFX.crit(); break;
+    }
+    case 'magic_bolt': {
+      let bx=p.x, by=p.y;
+      for (let i=0;i<8;i++) {
+        bx+=dx; by+=dy; if (!walkable(bx,by)) break;
+        const e=entityAt(bx,by);
+        if (e) {
+          const d=eff.base+p.int*2+rndInt(4); e.hp-=d;
+          msg(`${ab.name} → ${e.name}: ${d}!`,'#0af');
+          if (eff.status==='slow') { e.slowed=(e.slowed||0)+eff.statusTurns; msg(`${e.name} rallentato!`,'#0af'); }
+          if (e.hp<=0) killEnemy(e);
+          SFX.hit(); break;
+        }
+      }
+      break;
+    }
+  }
+  endTurn();
+  return true;
+}
+
+function tickAbilityCDs() {
+  if (!G.player.abilities) return;
+  for (const ab of G.player.abilities) if (ab._cd>0) ab._cd--;
+  // Regen (from effects)
+  const regen = G.player.effects.find(e=>e.stat==='regen');
+  if (regen) { const h=Math.min(regen.value,G.player.maxHp-G.player.hp); if(h>0) G.player.hp+=h; }
+  // Passive regen (from synergies)
+  const synReg = getSynergyBonuses().regenPassive;
+  if (synReg>0) { const h=Math.min(synReg,G.player.maxHp-G.player.hp); if(h>0) G.player.hp+=h; }
+  // Enemy status ticks
+  for (const e of G.entities) { if(e.feared>0) e.feared--; if(e.slowed>0) e.slowed--; }
+}
+
+function getPlaystyleLabel() {
+  const s = G.player.style;
+  const entries = Object.entries(s).sort((a,b)=>b[1]-a[1]);
+  if (entries[0][1]===0) return {label:'Esploratore', key:'melee'};
+  const labels = {melee:'Guerriero', magic:'Mago', stealth:'Ombra', defense:'Guardiano', support:'Guaritore'};
+  return {label:labels[entries[0][0]], key:entries[0][0]};
+}
+
+function abilityStyleScore(ab) {
+  const s = G.player.style;
+  const total = s.melee+s.magic+s.stealth+s.defense+s.support+1;
+  const tags = ab.tags || [];
+  let score = 1; // base score so every ability has a chance
+  // Map tags to style categories and add weighted score
+  if (tags.some(t=>['mischia','attacco','fisico'].includes(t))) score += s.melee/total;
+  if (tags.some(t=>['magia','fuoco','gelo','mente'].includes(t))) score += s.magic/total;
+  if (tags.some(t=>['furtivo','movimento'].includes(t))) score += s.stealth/total;
+  if (tags.some(t=>['difesa','buff'].includes(t))) score += s.defense/total;
+  if (tags.some(t=>['cura','morale','natura'].includes(t))) score += s.support/total;
+  return score;
+}
+
+function getAbilityChoices() {
+  const known = new Set((G.player.abilities||[]).map(a=>a.id));
+  const p = G.player;
+  const eligible = ABILITY_DEFS.filter(a => {
+    if (known.has(a.id)) return false;
+    for (const [stat,val] of Object.entries(a.req)) if ((p[stat]||0)<val) return false;
+    return true;
+  });
+  if (eligible.length<=3) return eligible;
+  // Weighted random selection: playstyle-aligned abilities appear more often
+  const choices = [];
+  const pool = [...eligible];
+  for (let pick=0; pick<3 && pool.length>0; pick++) {
+    const weights = pool.map(a=>abilityStyleScore(a));
+    const sum = weights.reduce((a,b)=>a+b,0);
+    let r = Math.random()*sum;
+    let idx = 0;
+    for (let i=0; i<weights.length; i++) { r -= weights[i]; if (r<=0) { idx=i; break; } }
+    choices.push(pool[idx]);
+    pool.splice(idx,1);
+  }
+  return choices;
+}
+
+// ─────────────────────────────────────────
+//  SISTEMA SINERGIE — combinazioni a tag
+// ─────────────────────────────────────────
+// Ogni sinergia richiede tag specifici presenti tra abilità e/o oggetti equipaggiati.
+// Tre tipi:
+//  - passive: bonus sempre attivo quando i requisiti sono soddisfatti
+//  - combo: nuova abilità usabile (aggiunta temporaneamente)
+//  - fusion: ricetta per fondere oggetti al tavolo di crafting
+
+const SYNERGY_DEFS = [
+  // ── Abilità + Abilità ──
+  { id:'steam_blast', name:'Esplosione di Vapore',
+    desc:'Fuoco + Ghiaccio = danno area + cecità',
+    needs:[['fuoco','area'],['gelo']], type:'combo',
+    icon:'☁', cost:{mp:8}, cd:6,
+    effect:{type:'magic_area', radius:2, base:20, element:'vapore'},
+    tags:['magia','vapore','area'] },
+
+  { id:'shadow_fire', name:'Fuoco Oscuro',
+    desc:'Fuoco + Furtività = attacco invisibile che brucia',
+    needs:[['fuoco'],['furtivo']], type:'combo',
+    icon:'⚡', cost:{mp:6}, cd:5,
+    effect:{type:'magic_bolt', base:18, status:'burn', statusTurns:4},
+    tags:['magia','fuoco','furtivo'] },
+
+  { id:'battle_trance', name:'Trance di Battaglia',
+    desc:'Buff + Morale = ATK e CRIT potenziati',
+    needs:[['buff','morale'],['buff','fisico']], type:'passive',
+    bonus:{atk:3, critPct:15},
+    tags:['fisico','buff'] },
+
+  { id:'arcane_warrior', name:'Guerriero Arcano',
+    desc:'Mischia + Magia = i colpi fisici infliggono danno bonus magico',
+    needs:[['mischia','attacco'],['magia','attacco']], type:'passive',
+    bonus:{atk:4},
+    tags:['fisico','magia'] },
+
+  { id:'nature_shield', name:'Scudo Naturale',
+    desc:'Cura + Difesa = rigenerazione passiva +1 HP/turno',
+    needs:[['cura'],['difesa','buff']], type:'passive',
+    bonus:{def:2, regenPassive:1},
+    tags:['cura','difesa'] },
+
+  { id:'ghost_step', name:'Passo Fantasma',
+    desc:'Movimento + Schivata = schivata potenziata dopo dash',
+    needs:[['movimento'],['difesa','furtivo']], type:'passive',
+    bonus:{dodgePct:10},
+    tags:['furtivo','movimento'] },
+
+  { id:'mind_blade', name:'Lama Mentale',
+    desc:'Mente + Mischia = attacchi che drenano MP nemico',
+    needs:[['mente'],['mischia']], type:'combo',
+    icon:'◈', cost:{mp:5}, cd:4,
+    effect:{type:'melee_boost', mult:2.0},
+    tags:['magia','mente','mischia'] },
+
+  // ── Oggetto + Abilità ──
+  { id:'flaming_blade', name:'Lama Ardente',
+    desc:'Arma equipaggiata + abilità di fuoco = danno fuoco sui colpi',
+    needsItem:['weapon'], needsAbTag:['fuoco'], type:'passive',
+    bonus:{atk:3, fireDamage:true},
+    tags:['fuoco','mischia'] },
+
+  { id:'ice_armor', name:'Armatura Glaciale',
+    desc:'Armatura equipaggiata + abilità di gelo = danno riflesso',
+    needsItem:['armor'], needsAbTag:['gelo'], type:'passive',
+    bonus:{def:2, frostReflect:true},
+    tags:['gelo','difesa'] },
+
+  { id:'swift_blade', name:'Lama Rapida',
+    desc:'Arma equipaggiata + abilità furtiva = doppio attacco occasionale',
+    needsItem:['weapon'], needsAbTag:['furtivo'], type:'passive',
+    bonus:{doubleStrike:15}, // 15% chance
+    tags:['furtivo','mischia'] },
+];
+
+// ── Fusioni oggetto + oggetto (per il tavolo di crafting) ──
+const FUSION_RECIPES = [
+  { input:['Daga','Daga'], output:{ch:')',type:'weapon',name:'Doppie Daghe',col:'#aaf',effect:'weapon',power:5,known:true},
+    desc:'Due daghe → arma doppia veloce' },
+  { input:['Pozione di Cura','Pozione di Cura'], output:{ch:'!',type:'potion',name:'Pozione di Cura Grande',col:'#f4f',effect:'heal',power:50,known:true},
+    desc:'Due cure → cura potenziata' },
+  { input:['Spada Corta','Pozione di Forza'], output:{ch:')',type:'weapon',name:'Spada Infuocata',col:'#f80',effect:'weapon',power:8,known:true},
+    desc:'Spada + Forza → spada elementale' },
+  { input:['Armatura di Cuoio','Pozione di Cura'], output:{ch:'[',type:'armor',name:'Armatura Vivente',col:'#0f8',effect:'armor',power:4,known:true},
+    desc:'Cuoio + Cura → armatura che rigenera' },
+  { input:['Cotta di Maglia','Pozione di Forza'], output:{ch:'[',type:'armor',name:'Armatura del Titano',col:'#ff8',effect:'armor',power:9,known:true},
+    desc:'Maglia + Forza → armatura suprema' },
+];
+
+// ── Ricette extra (scopribili) ──
+// Queste non sono note all'inizio: si trovano su scroll drop o per sperimentazione
+const EXTRA_RECIPES = [
+  { id:'rx1', input:['Daga','Pozione di Veleno'],
+    output:{ch:')',type:'weapon',name:'Daga Avvelenata',col:'#0f8',effect:'weapon',power:4,known:true},
+    desc:'Daga + Veleno → arma che avvelena al colpo' },
+  { id:'rx2', input:['Ascia da Guerra','Pozione di Forza'],
+    output:{ch:')',type:'weapon',name:'Ascia del Berserker',col:'#f44',effect:'weapon',power:13,known:true},
+    desc:'Ascia + Forza → devastante ma pesante' },
+  { id:'rx3', input:['Armatura a Piastre','Pozione di Cura'],
+    output:{ch:'[',type:'armor',name:'Armatura Sacra',col:'#ff6',effect:'armor',power:11,known:true},
+    desc:'Piastre + Cura → armatura sacra potenziata' },
+  { id:'rx4', input:['Spada Lunga','Armatura di Cuoio'],
+    output:{ch:')',type:'weapon',name:'Lama del Predatore',col:'#fa0',effect:'weapon',power:9,known:true},
+    desc:'Spada + Cuoio → arma agile e leggera' },
+  { id:'rx5', input:['Pozione di Forza','Pozione di Cura'],
+    output:{ch:'!',type:'potion',name:'Elisir del Guerriero',col:'#f0c',effect:'both',power:25,known:true},
+    desc:'Forza + Cura → elisir che cura e potenzia' },
+  { id:'rx6', input:['Spada Corta','Cotta di Maglia'],
+    output:{ch:')',type:'weapon',name:'Spada Difensiva',col:'#0af',effect:'weapon',power:6,known:true},
+    desc:'Spada + Maglia → parata integrata (+2 DEF)' },
+  { id:'rx7', input:['Daga','Armatura di Cuoio'],
+    output:{ch:')',type:'weapon',name:'Stiletto del Ladro',col:'#8f8',effect:'weapon',power:3,known:true},
+    desc:'Daga + Cuoio → leggero, +crit e +schivata' },
+  // rx8-rx13 new discoverable recipes
+  { id:'rx8',  in:['Spada Lunga','Pozione di Forza'], out:{ id:'lama_potenziata', name:'Lama Potenziata', ch:'/', color:'#f84', col:'#f84', type:'weapon', power:9, desc:'Una spada lunga potenziata magicamente' } },
+  { id:'rx9',  in:['Elmetto di Ferro','Pozione di Cura'], out:{ id:'elmetto_sacro', name:'Elmetto Sacro', ch:'^', color:'#ff8', col:'#ff8', type:'headgear', power:5, desc:'Un elmetto benedetto', magic:{hpRegen:1} } },
+  { id:'rx10', in:['Stivali di Ferro','Pozione di Velocità'], out:{ id:'stivali_del_vento', name:'Stivali del Vento', ch:'~', color:'#4f8', col:'#4f8', type:'footwear', power:3, desc:'Velocità soprannaturale', magic:{dexBonus:4,dodgeBonus:6} } },
+  { id:'rx11', in:['Anello della Forza','Pozione di Forza'], out:{ id:'anello_titano', name:'Anello del Titano', ch:'=', color:'#f44', col:'#f44', type:'ring', power:0, desc:'Forza titanica', magic:{strBonus:5,atkBonus:3} } },
+  { id:'rx12', in:['Daga','Anello del Critico'], out:{ id:'daga_critica', name:'Daga Critica', ch:'/', color:'#ff0', col:'#ff0', type:'weapon', power:7, desc:'Colpisce quasi sempre in modo critico', magic:{critBonus:15,dexBonus:2} } },
+  { id:'rx13', in:['Cotta di Maglia','Stivali di Cuoio'], out:{ id:'armatura_mobile', name:'Armatura Mobile', ch:']', color:'#48f', col:'#48f', type:'armor', power:7, desc:'Protegge senza rallentare', magic:{defBonus:2,dexBonus:2,dodgeBonus:4} } },
+];
+
+// Tier 2 recipes (secret - no hints shown)
+const TIER2_RECIPES = [
+  { id:'t2r1', in:['Daga Avvelenata','Stiletto del Ladro'], out:{ id:'lama_ombra', name:'Lama d\'Ombra', ch:'/', color:'#84f', col:'#84f', type:'weapon', power:12, desc:'Un\'arma letale forgiata dall\'oscurità', magic:{critBonus:10,dodgeBonus:5,dexBonus:3} } },
+  { id:'t2r2', in:['Ascia del Berserker','Lama del Predatore'], out:{ id:'ascia_chaos', name:'Ascia del Chaos', ch:'/', color:'#f44', col:'#f44', type:'weapon', power:15, desc:'Distrugge tutto ciò che tocca', magic:{atkBonus:8,strBonus:4} } },
+  { id:'t2r3', in:['Armatura Sacra','Spada Difensiva'], out:{ id:'egida_santa', name:'Egida Santa', ch:']', color:'#ff8', col:'#ff8', type:'armor', power:14, desc:'Protezione divina assoluta', magic:{defBonus:8,hpRegen:2,poisonImmune:true} } },
+  { id:'t2r4', in:['Elisir del Guerriero','Armatura Sacra'], out:{ id:'corazza_benedetta', name:'Corazza Benedetta', ch:']', color:'#f80', col:'#f80', type:'armor', power:12, desc:'Armatura impregnata di magia guerriera', magic:{defBonus:6,atkBonus:4,hpRegen:1} } },
+  { id:'t2r5', in:['Lama del Predatore','Spada Difensiva'], out:{ id:'spada_dualita', name:'Spada della Dualità', ch:'/', color:'#4ff', col:'#4ff', type:'weapon', power:13, desc:'Attacca e difende allo stesso tempo', magic:{atkBonus:5,defBonus:5,critBonus:5} } },
+];
+
+// Tier 3 recipes - "Leggenda Oscura" (only 3 exist, combine two Tier 2 items)
+const TIER3_RECIPES = [
+  { id:'t3r1', in:['Lama d\'Ombra','Ascia del Chaos'], out:{ id:'flagello_eterno', name:'Flagello Eterno', ch:'†', color:'#f0f', col:'#f0f', type:'weapon', power:25, desc:'L\'arma più potente mai forgiata', magic:{atkBonus:15,critBonus:15,strBonus:5,dexBonus:5} } },
+  { id:'t3r2', in:['Egida Santa','Corazza Benedetta'], out:{ id:'armatura_eternita', name:'Armatura dell\'Eternità', ch:'§', color:'#ff0', col:'#ff0', type:'armor', power:22, desc:'Protezione leggendaria assoluta', magic:{defBonus:15,hpRegen:3,mpRegen:2,poisonImmune:true} } },
+  { id:'t3r3', in:['Spada della Dualità','Egida Santa'], out:{ id:'forma_perfetta', name:'Forma Perfetta', ch:'O', color:'#0ff', col:'#0ff', type:'weapon', power:20, desc:'L\'equilibrio assoluto tra attacco e difesa', magic:{atkBonus:10,defBonus:10,critBonus:8,hpRegen:2,strBonus:3,dexBonus:3} } },
+];
+
+// Controlla se una ricetta è nota (base o scoperta)
+function canFuse(item1Name, item2Name) {
+  const allRecipes = [...FUSION_RECIPES, ...EXTRA_RECIPES.filter(r=>(G.knownExtraRecipes||new Set()).has(r.id))];
+  return allRecipes.find(r =>
+    (r.input[0]===item1Name && r.input[1]===item2Name) ||
+    (r.input[0]===item2Name && r.input[1]===item1Name)
+  );
+}
+
+// ── Motore sinergie ──
+function checkSynergies() {
+  const p = G.player;
+  const abTags = new Set();
+  for (const ab of p.abilities) for (const t of ab.tags) abTags.add(t);
+
+  const hasItem = {weapon: !!p.weapon, armor: !!p.armor};
+  const oldActive = new Set((G.activeSynergies||[]).map(s=>s.id));
+  G.activeSynergies = [];
+
+  for (const syn of SYNERGY_DEFS) {
+    let met = true;
+
+    if (syn.needs) {
+      // Each entry in needs[] is a set of tags that must ALL be present
+      for (const tagGroup of syn.needs) {
+        if (!tagGroup.every(t => abTags.has(t))) { met=false; break; }
+      }
+    }
+
+    if (syn.needsItem) {
+      for (const itemType of syn.needsItem) {
+        if (!hasItem[itemType]) { met=false; break; }
+      }
+    }
+
+    if (syn.needsAbTag) {
+      for (const t of syn.needsAbTag) {
+        if (!abTags.has(t)) { met=false; break; }
+      }
+    }
+
+    if (!met) continue;
+
+    G.activeSynergies.push(syn);
+
+    // Announce new discoveries
+    if (!oldActive.has(syn.id) && !G.discoveredSynergies.has(syn.id)) {
+      G.discoveredSynergies.add(syn.id);
+      msg(`★ Sinergia scoperta: ${syn.name}!`, '#f0c');
+      msg(`  ${syn.desc}`, '#c8a');
+      SFX.levelup();
+    }
+  }
+
+  // Apply passive bonuses
+  recalcStats();
+}
+
+function getSynergyBonuses() {
+  const bonuses = {atk:0, def:0, critPct:0, dodgePct:0, maxHp:0, maxMp:0,
+    regenPassive:0, fireDamage:false, frostReflect:false, doubleStrike:0};
+  for (const syn of (G.activeSynergies||[])) {
+    if (syn.type==='passive' && syn.bonus) {
+      for (const [k,v] of Object.entries(syn.bonus)) {
+        if (typeof v === 'boolean') bonuses[k] = bonuses[k] || v;
+        else bonuses[k] = (bonuses[k]||0) + v;
+      }
+    }
+  }
+  return bonuses;
+}
+
+// Get combo abilities from active synergies
+function getComboAbilities() {
+  return (G.activeSynergies||[]).filter(s=>s.type==='combo');
+}
+
+// ── Tavolo di Crafting ──
+function doBackfire(idx1, idx2, p){
+  p = p || G.player;
+  const outcomes = [
+    // 1: Explosion - damages player
+    ()=>{
+      const dmg = 5 + Math.floor(Math.random()*10);
+      p.hp = Math.max(1, p.hp-dmg);
+      msg(`ESPLOSIONE! L'incudine esplode! Subisci ${dmg} danni!`,'#f44');
+      SFX.hurt();
+    },
+    // 2: Corruption - items become cursed
+    ()=>{
+      const it = p.inv[idx1];
+      if(it){ it.cursed=true; it.curseCharges=15; it._curseBroken=false; it.rarityColor='#c0f'; }
+      msg(`CORRUZIONE! ${it?it.name:'Un oggetto'} e' stato maledetto!`,'#c0f');
+    },
+    // 3: Broken anvil
+    ()=>{
+      G.anvilBroken = G.turn + 20;
+      msg(`L'incudine si e' rotta! Tornera' usabile tra 20 turni`,'#f84');
+    },
+    // 4: Alien object - one item becomes random weird thing
+    ()=>{
+      const it = p.inv[idx1];
+      const weirdNames = ['Oggetto Alieno','Cubo Strano','Frammento Cosmico','Artefatto Ignoto'];
+      const nm = weirdNames[Math.floor(Math.random()*weirdNames.length)];
+      if(it){ it.name=nm; it.color='#0ff'; it.col='#0ff'; it.rarityColor='#0ff'; it.desc='Non sai cosa sia'; delete it.type; }
+      msg(`L'oggetto si e' trasformato in: ${nm}!`,'#0ff');
+    },
+    // 5: Reversed backfire - one random item in inv gets buffed
+    ()=>{
+      const idx = Math.floor(Math.random()*p.inv.length);
+      const it = p.inv[idx];
+      if(it && it.power !== undefined){ it.power = (it.power||0)+3; }
+      if(it && it.magic){ const k=Object.keys(it.magic)[0]; if(k) it.magic[k]=(it.magic[k]||0)+2; }
+      msg(`Backfire inverso! ${it?it.name:'Qualcosa'} e' diventato piu' potente!`,'#ff0');
+    }
+  ];
+  const outcome = outcomes[Math.floor(Math.random()*outcomes.length)];
+  outcome();
+}
+
+function doFusion(idx1, idx2){
+  const p = G.player;
+  const a = p.inv[idx1], b = p.inv[idx2];
+  if(!a||!b){ msg("Seleziona due oggetti validi",'#f44'); return false; }
+  if(a===b){ msg("Non puoi combinare un oggetto con se stesso",'#f44'); return false; }
+
+  // Check anvil broken
+  if(G.anvilBroken && G.turn<G.anvilBroken){ msg(`L'incudine e' rotta! Riparabile tra ${G.anvilBroken-G.turn} turni`,'#f44'); return false; }
+
+  const aName = a.name, bName = b.name;
+
+  // Helper to match recipe
+  function matches(rx, n1, n2){
+    const arr = rx.in || rx.input;
+    if(!arr) return false;
+    return (arr[0]===n1&&arr[1]===n2)||(arr[0]===n2&&arr[1]===n1);
+  }
+
+  // Check TIER3 first (highest priority)
+  for(const rx of TIER3_RECIPES){
+    if(matches(rx, aName, bName)){
+      const out = {...rx.out, magic:{...(rx.out.magic||{})}};
+      p.inv.splice(Math.max(idx1,idx2),1); p.inv.splice(Math.min(idx1,idx2),1);
+      if(p.inv.length<12) p.inv.push(out);
+      G.knownTier3.add(rx.id);
+      msg(`LEGGENDA OSCURA! Hai creato: ${out.name}!`,'#ff0');
+      SFX.levelup();
+      return true;
+    }
+  }
+
+  // Check TIER2
+  for(const rx of TIER2_RECIPES){
+    if(matches(rx, aName, bName)){
+      const out = {...rx.out, magic:{...(rx.out.magic||{})}};
+      p.inv.splice(Math.max(idx1,idx2),1); p.inv.splice(Math.min(idx1,idx2),1);
+      if(p.inv.length<12) p.inv.push(out);
+      G.knownTier2.add(rx.id);
+      msg(`CRAFT AVANZATO! Hai creato: ${out.name}!`,'#f80');
+      SFX.levelup();
+      return true;
+    }
+  }
+
+  // Check base FUSION_RECIPES (use input field)
+  for(const rx of FUSION_RECIPES){
+    if(matches(rx, aName, bName)){
+      const out = {...rx.output};
+      if(out.magic) out.magic={...out.magic};
+      p.inv.splice(Math.max(idx1,idx2),1); p.inv.splice(Math.min(idx1,idx2),1);
+      if(p.inv.length<12) p.inv.push(out);
+      G.knownRecipes = G.knownRecipes||new Set();
+      msg(`Hai creato: ${out.name}!`,'#4f4');
+      SFX.levelup();
+      return true;
+    }
+  }
+
+  // Check EXTRA_RECIPES known ones (old format uses input)
+  for(const rx of EXTRA_RECIPES){
+    if(matches(rx, aName, bName)){
+      const knownField = rx.in ? G.knownExtraRecipes.has(rx.id) : G.knownExtraRecipes.has(rx.id);
+      const outObj = rx.out || rx.output;
+      if(!outObj) continue;
+      const out = {...outObj};
+      if(out.magic) out.magic={...out.magic};
+      p.inv.splice(Math.max(idx1,idx2),1); p.inv.splice(Math.min(idx1,idx2),1);
+      if(p.inv.length<12) p.inv.push(out);
+      G.knownExtraRecipes.add(rx.id);
+      msg(`Ricetta scoperta! Hai creato: ${out.name}!`,'#f80');
+      SFX.levelup();
+      return true;
+    }
+  }
+
+  // No recipe found - backfire!
+  doBackfire(idx1, idx2, p);
+  return false;
+}
+
+// ─────────────────────────────────────────
+//  STATO GLOBALE
+// ─────────────────────────────────────────
+let G = {};   // game state
+let canvas, ctx;
+
+// ─────────────────────────────────────────
+//  STATISTICHE DERIVATE
+// ─────────────────────────────────────────
+function recalcStats(){
+  const p = G.player;
+  // Save base stats before magic bonuses
+  const bStr = p._baseStr !== undefined ? p._baseStr : p.str;
+  const bDex = p._baseDex !== undefined ? p._baseDex : p.dex;
+  const bInt = p._baseInt !== undefined ? p._baseInt : p.int;
+  p._baseStr = bStr; p._baseDex = bDex; p._baseInt = bInt;
+
+  // Reset to base
+  p.str = bStr; p.dex = bDex; p.int = bInt;
+
+  // Collect magic bonuses from all equipped items
+  const slots = [p.weapon, p.armor, p.headgear, p.footwear, p.ring1, p.ring2];
+  let mAtk=0,mDef=0,mStr=0,mDex=0,mInt=0,mCrit=0,mDodge=0,mHpRegen=0,mMpRegen=0,mFire=0;
+  let poisonImmune=false;
+  for(const it of slots){
+    if(!it || !it.magic) continue;
+    const m = it.magic;
+    mAtk    += m.atkBonus    || 0;
+    mDef    += m.defBonus    || 0;
+    mStr    += m.strBonus    || 0;
+    mDex    += m.dexBonus    || 0;
+    mInt    += m.intBonus    || 0;
+    mCrit   += m.critBonus   || 0;
+    mDodge  += m.dodgeBonus  || 0;
+    mHpRegen+= m.hpRegen     || 0;
+    mMpRegen+= m.mpRegen     || 0;
+    mFire   += m.fireDamage  || 0;
+    if(m.poisonImmune) poisonImmune=true;
+  }
+  p.str += mStr; p.dex += mDex; p.int += mInt;
+
+  const weaponPow = p.weapon ? p.weapon.power : 0;
+  const armorPow  = p.armor  ? p.armor.power  : 0;
+  const headPow   = p.headgear ? p.headgear.power : 0;
+  const footPow   = p.footwear ? p.footwear.power : 0;
+
+  p.maxHp = 15 + p.vit * 5 + p.lv * 3;
+  p.maxMp = 5  + p.wil * 3 + p.int * 1;
+  const isRanged = p.weapon && p.weapon.ranged;
+  p.atk = (isRanged ? 3 + Math.floor(p.dex*2) + Math.floor(p.lv*0.5)
+                     : 3 + Math.floor(p.str*1.5) + weaponPow + Math.floor(p.lv*0.5)) + mAtk;
+  p.def = Math.floor(p.vit*0.4) + armorPow + headPow + footPow + Math.floor(p.lv*0.3) + mDef;
+  p.critPct  = 5 + p.dex * 1.2 + mCrit;
+  p.dodgePct = p.dex * 0.8 + mDodge;
+  p._magicHpRegen = mHpRegen;
+  p._magicMpRegen = mMpRegen;
+  p._fireDamage   = mFire;
+  p._poisonImmune = poisonImmune;
+
+  // Applica bonus sinergie passive
+  const synB = getSynergyBonuses();
+  p.atk += synB.atk; p.def += synB.def;
+  p.critPct += synB.critPct; p.dodgePct += synB.dodgePct;
+  p.maxHp += synB.maxHp; p.maxMp += synB.maxMp;
+  // Applica effetti temporanei
+  for (const eff of p.effects) {
+    if (eff.stat === 'atk') p.atk += eff.value;
+    if (eff.stat === 'def') p.def += eff.value;
+    if (eff.stat === 'maxHp') p.maxHp += eff.value;
+    if (eff.stat === 'maxMp') p.maxMp += eff.value;
+  }
+  p.hp = Math.min(p.hp, p.maxHp);
+  p.mp = Math.min(p.mp, p.maxMp);
+}
+
+function tickEffects() {
+  const p = G.player;
+  p.effects = p.effects.filter(eff => {
+    eff.turns--;
+    if (eff.turns <= 0) {
+      msg(`${eff.name} svanisce.`, '#888');
+      return false;
+    }
+    return true;
+  });
+  recalcStats();
+}
+
+function addEffect(name, stat, value, turns, col='#0af') {
+  G.player.effects.push({name, stat, value, turns, col});
+  msg(`${name}! (${turns} turni)`, col);
+  recalcStats();
+}
+
+function newGame() {
+  const savedDiff = G.difficulty || 'normal';
+  G = {
+    difficulty: savedDiff,
+    floor: 1,
+    map: [],
+    rooms: [],
+    entities: [],
+    items: [],
+    messages: [],
+    visible: new Set(),
+    explored: new Set(),
+    camX: 0, camY: 0,
+    dead: false,
+    lvlUp: 0,           // pending level-up choices
+    invOpen: false,
+    helpOpen: false,
+    shopOpen: false,
+    shopTab: 'buy',
+    activeSynergies: [],
+    discoveredSynergies: new Set(),
+    knownExtraRecipes: new Set(),
+    knownTier2:  new Set(),
+    knownTier3:  new Set(),
+    anvilBroken: 0,
+    bossDefeated:false,
+    victoryScreen:false,
+    pendingVictory:false,
+    craftOpen: false,
+    craftSelect: -1,
+    abilitiesOpen: false,  // schermata gestione abilità
+    abilityCursor: 0,      // cursore nella lista abilità
+    identified: {},
+    turn: 0,
+    invCursor: 0,
+    shopCursor: 0,
+    craftCursor: 0,
+    invDrop: false,
+    rangedMode: false,
+    rangedTarget: null,
+    rangedItem: null,
+  };
+  G.player = {
+    x:0, y:0,
+    // Stat primarie
+    str:3, dex:2, int:1, vit:3, wil:1,
+    // Derivate (ricalcolate da recalcStats)
+    hp:0, maxHp:0,
+    mp:0, maxMp:0,
+    atk:0, def:0,
+    critPct:5, dodgePct:0,
+    lv:1, xp:0, xpNext:20,
+    gold:0,
+    inv:[],
+    weapon:null,
+    armor:null,
+    headgear: null,
+    footwear:  null,
+    ring1:     null,
+    ring2:     null,
+    poison:0,
+    statPts:0,
+    effects:[],         // buff/debuff attivi
+    abilities:[],       // tutte le abilità apprese (fino a 15)
+    hotbar:[null,null,null,null,null], // ID abilità equipaggiate (5 slot Q-E-R-T-Y)
+    // Playstyle tracking
+    style: { melee:0, magic:0, stealth:0, defense:0, support:0 },
+    hunger: 100,  // solo Hardcore: 0=muori di fame
+  };
+  G.abilityTarget = null;
+  G.abilityChoices = null;  // choices shown at level up
+  recalcStats();
+  G.player.hp = G.player.maxHp;
+  G.player.mp = G.player.maxMp;
+  buildFloor();
+  computeFOV();
+  updateCam();
+  msg('Benvenuto in ITALODISCO!', '#ff6');
+  msg('Esplora il dungeon. Trova > per scendere.', '#aaa');
+  loop();
+}
+
+// ─────────────────────────────────────────
+//  SAVE / LOAD (localStorage)
+// ─────────────────────────────────────────
+const SAVE_KEY = 'italodisco_save';
+
+function saveGame() {
+  const data = {
+    difficulty: G.difficulty || 'normal',
+    floor: G.floor,
+    map: G.map,
+    rooms: G.rooms,
+    entities: G.entities,
+    items: G.items,
+    messages: G.messages.slice(0,20),
+    explored: [...G.explored],
+    turn: G.turn,
+    identified: G.identified,
+    player: {
+      ...G.player,
+      abilities: G.player.abilities.map(a=>({id:a.id, _cd:a._cd||0})),
+    },
+    merchant: G.merchant || null,
+    discoveredSynergies: [...(G.discoveredSynergies||[])],
+    knownExtraRecipes: [...(G.knownExtraRecipes||[])],
+    knownTier2:  [...(G.knownTier2||[])],
+    knownTier3:  [...(G.knownTier3||[])],
+    anvilBroken: G.anvilBroken||0,
+    bossDefeated:G.bossDefeated||false,
+    victoryScreen:G.victoryScreen||false,
+  };
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    msg('Partita salvata!', '#0f8');
+  } catch(e) { msg('Errore salvataggio!', '#f44'); }
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    G.difficulty = data.difficulty || 'normal';
+    G.floor = data.floor;
+    G.map = data.map;
+    G.rooms = data.rooms;
+    G.entities = data.entities;
+    G.items = data.items;
+    G.messages = data.messages || [];
+    G.explored = new Set(data.explored);
+    G.visible = new Set();
+    G.turn = data.turn || 0;
+    G.identified = data.identified || {};
+    G.dead = false;
+    G.lvlUp = 0;
+    G.invOpen = false;
+    G.helpOpen = false;
+    G.shopOpen = false;
+    G.shopTab = 'buy';
+    G.craftOpen = false;
+    G.craftSelect = -1;
+    G.abilitiesOpen = false;
+    G.abilityCursor = 0;
+    G.invCursor = 0;
+    G.shopCursor = 0;
+    G.craftCursor = 0;
+    G.invDrop = false;
+    G.rangedMode = false;
+    G.rangedTarget = null;
+    G.rangedItem = null;
+    G.abilityTarget = null;
+    G.abilityChoices = null;
+    G.merchant = data.merchant || null;
+    G.discoveredSynergies = new Set(data.discoveredSynergies || []);
+    G.knownExtraRecipes = new Set(data.knownExtraRecipes || []);
+    G.knownTier2  = new Set(data.knownTier2||[]);
+    G.knownTier3  = new Set(data.knownTier3||[]);
+    G.anvilBroken = data.anvilBroken||0;
+    G.bossDefeated= data.bossDefeated||false;
+    G.victoryScreen=data.victoryScreen||false;
+    G.pendingVictory=false;
+    G.activeSynergies = [];
+    // Restore player
+    const pd = data.player;
+    G.player = {...pd};
+    G.player.effects = pd.effects || [];
+    G.player.style = pd.style || {melee:0,magic:0,stealth:0,defense:0,support:0};
+    G.player.hunger = (pd.hunger !== undefined) ? pd.hunger : 100;
+    G.player.inv = pd.inv || [];
+    G.player.headgear = pd.headgear || null;
+    G.player.footwear  = pd.footwear  || null;
+    G.player.ring1     = pd.ring1     || null;
+    G.player.ring2     = pd.ring2     || null;
+    // Restore abilities from IDs
+    G.player.abilities = (pd.abilities||[]).map(saved => {
+      const def = ABILITY_DEFS.find(d=>d.id===saved.id);
+      if (!def) return null;
+      return {...def, _cd: saved._cd||0};
+    }).filter(Boolean);
+    // Restore hotbar (array of IDs or null)
+    G.player.hotbar = (pd.hotbar || [null,null,null,null,null]).map(id => {
+      if (!id) return null;
+      return G.player.abilities.find(a=>a.id===id) ? id : null;
+    });
+    recalcStats();
+    checkSynergies();
+    computeFOV();
+    updateCam();
+    msg('Partita caricata!', '#0f8');
+    return true;
+  } catch(e) { msg('Errore caricamento!', '#f44'); return false; }
+}
+
+function deleteSave() {
+  localStorage.removeItem(SAVE_KEY);
+}
+
+function hasSave() {
+  return !!localStorage.getItem(SAVE_KEY);
+}
+
+// ─────────────────────────────────────────
+//  GENERAZIONE DUNGEON
+// ─────────────────────────────────────────
+function generateMerchantStock() {
+  const f = G.floor;
+  const stock = [];
+  // Always sell potions
+  stock.push({...ITEM_POOL[0], price: 15+f*3, known:true}); // Pozione di Cura
+  if (Math.random()<0.5) stock.push({...ITEM_POOL[1], price: 25+f*3, known:true}); // Pozione di Forza
+  // Weapons scaled to floor
+  const weapons = ITEM_POOL.filter(i=>i.type==='weapon');
+  const wIdx = Math.min(Math.floor(f/2), weapons.length-1);
+  stock.push({...weapons[wIdx], price: 20+weapons[wIdx].power*8, known:true});
+  if (wIdx+1<weapons.length && Math.random()<0.4) {
+    stock.push({...weapons[wIdx+1], price: 20+weapons[wIdx+1].power*8, known:true});
+  }
+  // Armor scaled to floor
+  const armors = ITEM_POOL.filter(i=>i.type==='armor');
+  const aIdx = Math.min(Math.floor(f/3), armors.length-1);
+  stock.push({...armors[aIdx], price: 25+armors[aIdx].power*10, known:true});
+  // Cibo: sempre disponibile (vitale in Hardcore)
+  stock.push({...ITEM_POOL.find(i=>i.name==='Razione'), price:6+f, known:true});
+  if (Math.random()<0.5) stock.push({...ITEM_POOL.find(i=>i.name==='Carne Secca'), price:10+f, known:true});
+  // Ammo always available
+  stock.push({...ITEM_POOL.find(i=>i.name==='Frecce'), price:8+f*2, known:true});
+  if (f>=2 && Math.random()<0.5) {
+    stock.push({...ITEM_POOL.find(i=>i.name==='Quadrelli'), price:12+f*2, known:true});
+  }
+  // Bow available from floor 2
+  if (f>=2) {
+    const bowItems = ITEM_POOL.filter(i=>i.ranged);
+    const bowIdx = Math.min(Math.floor((f-2)/3), bowItems.length-1);
+    stock.push({...bowItems[bowIdx], price:30+bowIdx*15, known:true});
+  }
+  return stock;
+}
+
+function buildFloor() {
+  G.map = Array.from({length:ROWS}, () => new Uint8Array(COLS).fill(TILE.WALL));
+  G.rooms = [];
+  G.entities = [];
+  G.items = [];
+  G.visible.clear();
+  // keep explored between floors? No — reset each floor for tension
+  G.explored.clear();
+
+  const targetRooms = Math.min(8 + Math.floor(G.floor * 0.7), 18);
+
+  for (let attempt = 0; attempt < 300 && G.rooms.length < targetRooms; attempt++) {
+    const w = 5 + rndInt(9);
+    const h = 4 + rndInt(6);
+    const x = 1 + rndInt(COLS - w - 2);
+    const y = 1 + rndInt(ROWS - h - 2);
+    const room = {x, y, w, h, cx: x + (w>>1), cy: y + (h>>1)};
+    if (!overlaps(room)) {
+      carveRoom(room);
+      if (G.rooms.length) connectRooms(G.rooms[G.rooms.length-1], room);
+      G.rooms.push(room);
+    }
+  }
+
+  // Place player center of first room
+  const sr = G.rooms[0];
+  G.player.x = sr.cx; G.player.y = sr.cy;
+
+  // Place stairs center of last room
+  const er = G.rooms[G.rooms.length-1];
+  G.map[er.cy][er.cx] = TILE.STAIRS;
+
+  // Place merchant in a middle room (not first, not last)
+  if (G.rooms.length>2) {
+    const midIdx = 1 + rndInt(G.rooms.length-2);
+    const mr = G.rooms[midIdx];
+    G.merchant = {
+      x: mr.cx, y: mr.cy,
+      stock: generateMerchantStock(),
+    };
+  } else {
+    G.merchant = null;
+  }
+
+  // Place crafting anvil in another room (50% chance per floor)
+  if (G.rooms.length>3 && Math.random()<0.5) {
+    // Pick a room that's not first, last, or merchant room
+    const candidates = G.rooms.filter((_,i)=>i>0 && i<G.rooms.length-1);
+    const cr = candidates[rndInt(candidates.length)];
+    if (!G.merchant || cr.cx!==G.merchant.x || cr.cy!==G.merchant.y) {
+      G.map[cr.cy][cr.cx] = TILE.ANVIL;
+    }
+  }
+
+  // Populate rooms (skip first)
+  for (let i = 1; i < G.rooms.length; i++) populate(G.rooms[i]);
+
+  // Place boss on boss floor
+  if(typeof isBossFloor==='function' && isBossFloor(G.floor) && !G.bossDefeated){
+    const bossDef = ENEMY_DEFS.find(e=>e.id==='boss');
+    if(bossDef){
+      const lastRoom = G.rooms[G.rooms.length-1];
+      // Place boss in last room
+      let bx, by, tries=0;
+      do{
+        bx = lastRoom.x+1+rndInt(lastRoom.w-2);
+        by = lastRoom.y+1+rndInt(lastRoom.h-2);
+        tries++;
+      }while((G.map[by][bx]!==TILE.FLOOR || (bx===G.player.x&&by===G.player.y) || entityAt(bx,by)) && tries<50);
+      if(tries<50){
+        G.entities.push({...JSON.parse(JSON.stringify(bossDef)), x:bx, y:by, maxHp:bossDef.hp});
+      }
+    }
+  }
+}
+
+function rndInt(n) { return Math.floor(Math.random()*n); }
+
+function overlaps(r) {
+  for (const e of G.rooms) {
+    if (r.x < e.x+e.w+1 && r.x+r.w > e.x-1 && r.y < e.y+e.h+1 && r.y+r.h > e.y-1) return true;
+  }
+  return false;
+}
+
+function carveRoom(r) {
+  for (let y=r.y; y<r.y+r.h; y++)
+    for (let x=r.x; x<r.x+r.w; x++)
+      G.map[y][x] = TILE.FLOOR;
+}
+
+function connectRooms(a, b) {
+  if (Math.random()<0.5) { hline(a.cx,b.cx,a.cy); vline(a.cy,b.cy,b.cx); }
+  else                   { vline(a.cy,b.cy,a.cx); hline(a.cx,b.cx,b.cy); }
+}
+function hline(x1,x2,y) { for(let x=Math.min(x1,x2);x<=Math.max(x1,x2);x++) G.map[y][x]=TILE.FLOOR; }
+function vline(y1,y2,x) { for(let y=Math.min(y1,y2);y<=Math.max(y1,y2);y++) G.map[y][x]=TILE.FLOOR; }
+
+function populate(room) {
+  const f = G.floor;
+  // enemies
+  const nE = 1 + rndInt(2) + Math.floor(f/4);
+  for (let i=0; i<nE; i++) {
+    // Only use non-boss enemies for populate
+    const nonBossDefs = ENEMY_DEFS.filter(e=>!e.isBoss);
+    const maxIdx = Math.min(Math.floor(f/2), nonBossDefs.length-1);
+    const def = nonBossDefs[rndInt(maxIdx+1)];
+    const bossF = typeof getBossFloor==='function' ? getBossFloor() : 7;
+    const bonus = G.bossDefeated && f>bossF
+      ? (bossF-1) + Math.floor((f-bossF)*2.5)
+      : f-1;
+    const pos = freeSpot(room, true);
+    if (!pos) continue;
+    G.entities.push({
+      ...JSON.parse(JSON.stringify(def)),
+      x:pos.x, y:pos.y,
+      hp:  def.hp  + bonus*3,
+      maxHp: def.hp + bonus*3,
+      atk: def.atk + Math.floor(bonus*0.6),
+      def: def.def + Math.floor(bonus*0.3),
+      xp:  def.xp  + bonus*5,
+    });
+  }
+  // items (60% per room)
+  if (Math.random()<0.6) {
+    const pos = freeSpot(room, false);
+    if (pos) {
+      const item = rndItem(f);
+      if (item.type==='gold') item.power = 5 + rndInt(15) + f*3;
+      G.items.push({...item, x:pos.x, y:pos.y});
+    }
+  }
+  // Cibo: sempre presente in Hardcore (40%), raramente altrimenti (10%)
+  const foodChance = G.difficulty==='hardcore' ? 0.40 : 0.10;
+  if (Math.random() < foodChance) {
+    const pos2 = freeSpot(room, false);
+    if (pos2) {
+      const foodPool = ITEM_POOL.filter(i=>i.type==='food');
+      // In Hardcore il cibo avariato è più raro
+      const weights = foodPool.map(fi => fi.rotten ? (G.difficulty==='hardcore'?0.15:0.3) : 1);
+      const totalW = weights.reduce((a,b)=>a+b,0);
+      let r = Math.random()*totalW;
+      let fi = foodPool[0];
+      for (let k=0;k<foodPool.length;k++) { r-=weights[k]; if(r<=0){fi=foodPool[k];break;} }
+      G.items.push({...fi, x:pos2.x, y:pos2.y});
+    }
+  }
+}
+
+function freeSpot(room, checkEntities) {
+  for (let t=0; t<30; t++) {
+    const x = room.x+1+rndInt(room.w-2);
+    const y = room.y+1+rndInt(room.h-2);
+    if (G.map[y][x] !== TILE.FLOOR) continue;
+    if (x===G.player.x && y===G.player.y) continue;
+    if (G.merchant && x===G.merchant.x && y===G.merchant.y) continue;
+    if (checkEntities && entityAt(x,y)) continue;
+    if (itemAt(x,y)) continue;
+    return {x,y};
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────
+//  FOV — raycasting semplice
+// ─────────────────────────────────────────
+function computeFOV() {
+  G.visible.clear();
+  const {x:px,y:py} = G.player;
+  const R = 8;
+  mark(px,py);
+  for (let deg=0; deg<360; deg+=1) {
+    const rad = deg * Math.PI/180;
+    let rx = px+0.5, ry = py+0.5;
+    const dx = Math.cos(rad)*0.4, dy = Math.sin(rad)*0.4;
+    for (let i=0; i<R/0.4; i++) {
+      rx+=dx; ry+=dy;
+      const tx=Math.floor(rx), ty=Math.floor(ry);
+      if (tx<0||tx>=COLS||ty<0||ty>=ROWS) break;
+      mark(tx,ty);
+      if (G.map[ty][tx]===TILE.WALL) break;
+    }
+  }
+}
+function mark(x,y) { const k=`${x},${y}`; G.visible.add(k); G.explored.add(k); }
+
+// Line-of-sight check (Bresenham)
+function hasLOS(x0,y0,x1,y1) {
+  let dx=Math.abs(x1-x0), dy=Math.abs(y1-y0);
+  let sx=x0<x1?1:-1, sy=y0<y1?1:-1;
+  let err=dx-dy, x=x0, y=y0;
+  while (true) {
+    if (x===x1&&y===y1) return true;
+    if (G.map[y]&&G.map[y][x]===TILE.WALL) return false;
+    const e2=2*err;
+    if (e2>-dy) { err-=dy; x+=sx; }
+    if (e2< dx) { err+=dx; y+=sy; }
+  }
+}
+
+// Get LOS path tiles
+function getLOSPath(x0,y0,x1,y1) {
+  const path=[];
+  let dx=Math.abs(x1-x0), dy=Math.abs(y1-y0);
+  let sx=x0<x1?1:-1, sy=y0<y1?1:-1;
+  let err=dx-dy, x=x0, y=y0;
+  while (true) {
+    path.push({x,y});
+    if (x===x1&&y===y1) break;
+    if (G.map[y]&&G.map[y][x]===TILE.WALL) break;
+    const e2=2*err;
+    if (e2>-dy) { err-=dy; x+=sx; }
+    if (e2< dx) { err+=dx; y+=sy; }
+  }
+  return path;
+}
+
+function dist(x0,y0,x1,y1) { return Math.sqrt((x1-x0)**2+(y1-y0)**2); }
+
+// Shoot with equipped bow at target tile
+function doShoot(tx, ty) {
+  const p = G.player;
+  const bow = p.weapon;
+  if (!bow || !bow.ranged) { msg('Non hai un arco equipaggiato!', '#f44'); return; }
+  const ammo = p.inv.find(i=>i.type==='ammo');
+  if (!ammo) { msg('Niente munizioni! Cerca frecce o quadrelli.', '#f44'); return; }
+  const d = dist(p.x,p.y,tx,ty);
+  if (d > bow.range) { msg(`Fuori portata! (max ${bow.range} caselle)`, '#f44'); return; }
+  if (!hasLOS(p.x,p.y,tx,ty)) { msg('Linea di tiro bloccata!', '#f44'); return; }
+  // Consume ammo
+  ammo.qty--;
+  if (ammo.qty<=0) p.inv.splice(p.inv.indexOf(ammo),1);
+  const remaining = p.inv.find(i=>i.type==='ammo'&&i.name===ammo.name);
+  const remQty = remaining ? remaining.qty : 0;
+  // Hit check (DEX-based accuracy)
+  const hitChance = Math.min(95, 60 + p.dex * 5);
+  if (Math.random()*100 > hitChance) {
+    msg(`Mancato! La ${ammo.name.toLowerCase()} si perde nell'ombra. (rimaste: ${remQty})`, '#888');
+    endTurn(); return;
+  }
+  // Check enemy at target
+  const enemy = entityAt(tx,ty);
+  if (enemy) {
+    const dmgVal = ammo.power + Math.floor(p.dex * 1.5) + Math.floor(p.lv * 0.3);
+    enemy.hp -= dmgVal;
+    msg(`Colpisci ${enemy.name} con ${ammo.name} per ${dmgVal} danni! (rimaste: ${remQty})`, '#0af'); SFX.hit();
+    p.style.magic++; // ranged counts toward style (use magic to track)
+    if (enemy.hp<=0) killEnemy(enemy);
+  } else {
+    msg(`La ${ammo.name.slice(0,-1)||ammo.name} colpisce il muro. (rimaste: ${remQty})`, '#888');
+  }
+  endTurn();
+}
+
+// Throw any item at target tile
+function doThrowItem(itemRef, tx, ty) {
+  const p = G.player;
+  const {item, idx} = itemRef;
+  const d = dist(p.x,p.y,tx,ty);
+  const maxRange = Math.max(3, 2 + Math.floor(p.str/2));
+  if (d > maxRange) { msg(`Non riesci a lanciare così lontano! (max ${maxRange} caselle)`, '#f44'); return; }
+  if (!hasLOS(p.x,p.y,tx,ty)) { msg('Linea di tiro bloccata!', '#f44'); return; }
+  // Remove item from inventory
+  p.inv.splice(idx,1);
+  const label = item.known ? item.name : 'oggetto';
+  const enemy = entityAt(tx,ty);
+  if (enemy) {
+    if (item.type==='potion') {
+      // Potions apply their effect on enemy (or reverse for healing)
+      if (item.effect==='heal') {
+        const healAmt = Math.floor(item.power*0.5);
+        enemy.hp = Math.min(enemy.maxHp||enemy.hp+healAmt, enemy.hp+healAmt);
+        msg(`Lanci ${label} su ${enemy.name}: lo guarisce di ${healAmt} HP! Oops!`, '#f44');
+      } else if (item.effect==='poison') {
+        if (!enemy.poisoned) enemy.poisoned=0;
+        enemy.poisoned += item.power;
+        msg(`Lanci ${label} su ${enemy.name}: avvelenato!`, '#0f8'); SFX.hit();
+      } else if (item.effect==='strkp') {
+        const dmgVal = 3 + Math.floor(p.dex * 0.5);
+        enemy.hp -= dmgVal;
+        msg(`Lanci ${label} su ${enemy.name} per ${dmgVal} danni!`, '#fa0'); SFX.hit();
+      } else {
+        const dmgVal = 2 + Math.floor(p.str * 0.3);
+        enemy.hp -= dmgVal;
+        msg(`Lanci ${label} su ${enemy.name} per ${dmgVal} danni!`, '#fa0'); SFX.hit();
+      }
+    } else if (item.type==='weapon') {
+      // Weapons: power/2 + STR
+      const dmgVal = Math.max(1, Math.floor(item.power*0.6) + Math.floor(p.str*0.4));
+      enemy.hp -= dmgVal;
+      msg(`Lanci ${label} su ${enemy.name} per ${dmgVal} danni!`, '#fa0'); SFX.hit();
+    } else if (item.type==='gold') {
+      const dmgVal = Math.max(1, Math.floor(item.power/10));
+      enemy.hp -= dmgVal;
+      msg(`Lanci oro su ${enemy.name} per ${dmgVal} danni! (soldi buttati...)`, '#ff0'); SFX.hit();
+    } else {
+      const dmgVal = Math.max(1, Math.floor(p.str * 0.3));
+      enemy.hp -= dmgVal;
+      msg(`Lanci ${label} su ${enemy.name} per ${dmgVal} danni!`, '#fa0'); SFX.hit();
+    }
+    if (enemy.hp<=0) killEnemy(enemy);
+  } else {
+    // Item lands on the ground at target
+    const landItem = {...item, x:tx, y:ty};
+    G.items.push(landItem);
+    msg(`Lanci ${label}: atterra a (${tx},${ty}).`, '#888');
+  }
+  endTurn();
+}
+
+function renderRangedOverlay() {
+  const p = G.player;
+  const t = G.rangedTarget;
+  // Draw trajectory line
+  if (t) {
+    const path = getLOSPath(p.x,p.y,t.x,t.y);
+    const camX = G.camX||0, camY = G.camY||0;
+    path.forEach(({x,y},i) => {
+      const sx = (x-camX)*TS + TS/2;
+      const sy = (y-camY)*TS + TS/2;
+      ctx.fillStyle = i===0 ? 'rgba(255,255,0,0)' : 'rgba(255,200,0,0.35)';
+      ctx.fillRect(sx-TS/2, sy-TS/2, TS, TS);
+    });
+    // Reticle at target
+    if (t) {
+      const sx = (t.x-camX)*TS;
+      const sy = (t.y-camY)*TS;
+      const enemy = entityAt(t.x,t.y);
+      ctx.strokeStyle = enemy ? '#f44' : '#ff6';
+      ctx.lineWidth=2;
+      ctx.strokeRect(sx+1, sy+1, TS-2, TS-2);
+      // Cross
+      ctx.beginPath();
+      ctx.moveTo(sx+TS/2-4, sy+TS/2); ctx.lineTo(sx+TS/2+4, sy+TS/2);
+      ctx.moveTo(sx+TS/2, sy+TS/2-4); ctx.lineTo(sx+TS/2, sy+TS/2+4);
+      ctx.stroke();
+    }
+  }
+  // HUD text
+  const item = G.rangedItem;
+  const isShot = !item && p.weapon && p.weapon.ranged;
+  const ammo = p.inv.find(i=>i.type==='ammo');
+  let hintText;
+  if (isShot) {
+    const bow = p.weapon;
+    hintText = `[MIRA] ${bow.name} (portata ${bow.range}) | ${ammo?ammo.name+' x'+ammo.qty:'NIENTE FRECCE!'} | ↑↓←→: mira | Invio: spara | Esc: annulla`;
+  } else if (item) {
+    hintText = `[LANCIA] ${item.item.name} | ↑↓←→: mira | Invio: lancia | Esc: annulla`;
+  }
+  ctx.fillStyle='rgba(0,0,0,0.7)';
+  ctx.fillRect(0, canvas.height-22, canvas.width, 22);
+  ctx.fillStyle='#ff6'; ctx.font='11px Courier New';
+  ctx.fillText(hintText||'', 10, canvas.height-7);
+  ctx.font=FONT;
+}
+function vis(x,y)  { return G.visible.has(`${x},${y}`); }
+function exp(x,y)  { return G.explored.has(`${x},${y}`); }
+
+// ─────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────
+function entityAt(x,y) { return G.entities.find(e=>e.x===x&&e.y===y)||null; }
+function itemAt(x,y)   { return G.items.find(i=>i.x===x&&i.y===y)||null; }
+function walkable(x,y) {
+  if (x<0||x>=COLS||y<0||y>=ROWS) return false;
+  const t=G.map[y][x]; return t===TILE.FLOOR||t===TILE.STAIRS||t===TILE.ANVIL;
+}
+
+// ─────────────────────────────────────────
+//  MESSAGGI
+// ─────────────────────────────────────────
+function msg(text, col='#bbb') {
+  G.messages.unshift({text,col,age:0});
+  if (G.messages.length>40) G.messages.pop();
+}
+
+// ─────────────────────────────────────────
+//  COMBATTIMENTO
+// ─────────────────────────────────────────
+function dmg(atk, def, critPct=0) {
+  let d = Math.max(1, atk - def + rndInt(4) - 1);
+  if (Math.random()*100 < critPct) {
+    d = Math.floor(d * 1.8);
+    msg('CRITICO!', '#ff0'); SFX.crit();
+  }
+  return d;
+}
+function tryDodge(dodgePct) {
+  return Math.random()*100 < dodgePct;
+}
+
+// ─────────────────────────────────────────
+//  AZIONI GIOCATORE
+// ─────────────────────────────────────────
+function tryMove(dx, dy) {
+  if (G.dead || G.lvlUp>0 || G.invOpen || G.rangedMode) return;
+  const nx = G.player.x+dx, ny = G.player.y+dy;
+
+  const enemy = entityAt(nx,ny);
+  if (enemy) {
+    G.player.style.melee++;
+    let d = dmg(G.player.atk, enemy.def, G.player.critPct);
+    const synB = getSynergyBonuses();
+    if (synB.fireDamage) { d += 3 + G.player.int; msg('Lama ardente!','#f80'); }
+    enemy.hp -= d;
+    msg(`Attacchi ${enemy.name} per ${d} danni!`, '#fa0'); SFX.hit();
+    // Double strike chance
+    if (synB.doubleStrike && Math.random()*100 < synB.doubleStrike) {
+      const d2 = dmg(G.player.atk, enemy.def, G.player.critPct);
+      enemy.hp -= d2;
+      msg(`Doppio colpo! +${d2} danni!`, '#aaf');
+    }
+    if (enemy.hp<=0) killEnemy(enemy);
+    endTurn(); return;
+  }
+
+  if (!walkable(nx,ny)) { SFX.wall(); return; }
+  G.player.x=nx; G.player.y=ny; SFX.step();
+
+  // Raccoglie oggetti
+  const it = itemAt(nx,ny);
+  if (it) pickup(it);
+
+  // Mercante
+  if (G.merchant && nx===G.merchant.x && ny===G.merchant.y) {
+    G.shopOpen = true;
+    G.shopTab = 'buy'; // 'buy' or 'sell'
+    msg('Il mercante ti saluta! Compra o vendi.', '#f0c'); SFX.pickup();
+  }
+
+  if (G.map[ny][nx]===TILE.STAIRS)
+    msg('Premi > per scendere al piano successivo.','#0ff');
+
+  // Incudine di fusione
+  if (G.map[ny][nx]===TILE.ANVIL) {
+    G.craftOpen = true;
+    G.craftSelect = -1;
+    msg('Incudine di Fusione! Combina due oggetti.', '#fa0'); SFX.pickup();
+  }
+
+  endTurn();
+}
+
+function killEnemy(e) {
+  msg(`${e.name} sconfitto! +${e.xp} XP`, '#0f0'); SFX.kill();
+  G.entities = G.entities.filter(x=>x!==e);
+  G.player.xp += e.xp;
+  G.player.kills = (G.player.kills||0)+1;
+  // Reduce curse charges on all equipped items
+  const p = G.player;
+  const cursedSlots = [p.weapon, p.armor, p.headgear, p.footwear, p.ring1, p.ring2];
+  for(const slot of cursedSlots){
+    if(slot && slot.cursed && !slot._curseBroken){
+      slot.curseCharges--;
+      if(slot.curseCharges<=0){
+        slot._curseBroken = true;
+        msg(`La maledizione su ${slot.name} si spezza!`,'#c0f');
+      }
+    }
+  }
+  // Check boss death
+  if(e.isBoss){
+    G.bossDefeated = true;
+    G.pendingVictory = true;
+    msg("HAI SCONFITTO IL DJ INFERNALE! La musica si ferma...",'#ff0');
+    msg("Premi [Invio] per vedere il finale o [C] per continuare!",'#f80');
+  }
+  // Drop ricetta: probabilità in base alla forza del nemico
+  const dropChance = e.xp >= 200 ? 0.50 : e.xp >= 60 ? 0.25 : e.xp >= 20 ? 0.12 : 0.05;
+  if (Math.random() < dropChance) {
+    const undiscovered = EXTRA_RECIPES.filter(r => !G.knownExtraRecipes.has(r.id));
+    if (undiscovered.length) {
+      const rec = undiscovered[rndInt(undiscovered.length)];
+      // Spawna uno scroll vicino al nemico
+      const scroll = {
+        ch:'~', type:'recipe', name:`Ricetta: ${rec.output.name}`,
+        col:'#fa0', effect:'recipe', recipeId:rec.id, power:0, known:true, x:e.x, y:e.y
+      };
+      G.items.push(scroll);
+      msg(`${e.name} lascia uno scroll misterioso!`, '#fa0');
+    }
+  }
+  // Ammo drops (archer-type enemies)
+  if (Math.random() < 0.15) {
+    const ammoItem = Math.random()<0.7
+      ? {...ITEM_POOL.find(i=>i.name==='Frecce'), x:e.x, y:e.y}
+      : {...ITEM_POOL.find(i=>i.name==='Quadrelli'), x:e.x, y:e.y};
+    if (ammoItem.name) G.items.push(ammoItem);
+  }
+  checkLvlUp();
+}
+
+function checkLvlUp() {
+  while (G.player.xp >= G.player.xpNext) {
+    G.player.xp -= G.player.xpNext;
+    G.player.lv++;
+    G.player.xpNext = Math.floor(G.player.xpNext * 1.6);
+    recalcStats();
+    G.player.hp = Math.min(G.player.hp + 10, G.player.maxHp);
+    G.player.mp = Math.min(G.player.mp + 5, G.player.maxMp);
+    G.player.statPts += 3;
+    G.lvlUp++;
+    msg(`★ LIVELLO ${G.player.lv}! Distribuisci i punti stat!`, '#ff0'); SFX.levelup();
+  }
+}
+
+function pickup(item) {
+  if (item.type==='gold') {
+    G.player.gold += item.power;
+    msg(`Raccogli ${item.power} monete d'oro.`, '#ff0'); SFX.pickup();
+    G.items = G.items.filter(i=>i!==item);
+    return;
+  }
+  // Ammo: stack with existing
+  if (item.type==='ammo') {
+    const existing = G.player.inv.find(i=>i.type==='ammo'&&i.name===item.name);
+    if (existing) {
+      existing.qty += item.qty||1;
+      G.items = G.items.filter(i=>i!==item);
+      msg(`Raccogli ${item.name} (+${item.qty}). Totale: ${existing.qty}`, '#fa0'); SFX.pickup();
+      return;
+    }
+  }
+  if (G.player.inv.length>=12) { msg(`Inventario pieno! Non puoi prendere: ${item.name}`,'#f44'); return; }
+  G.items = G.items.filter(i=>i!==item);
+  const copy = {...item};
+  // potions unknown until used
+  if (item.type==='potion' && !G.identified[item.name]) copy.known=false;
+  else copy.known=true;
+  G.player.inv.push(copy);
+  const label = copy.known ? copy.name : 'Pozione misteriosa';
+  msg(`Raccogli: ${label}`, '#aaf'); SFX.pickup();
+}
+
+function useItem(idx) {
+  const item = G.player.inv[idx];
+  if (!item) return;
+  const p = G.player;
+
+  if (item.type==='potion') {
+    item.known = true; G.identified[item.name]=true;
+    if (item.effect==='heal') {
+      const h = Math.min(item.power, p.maxHp-p.hp);
+      p.hp += h;
+      msg(`Bevi ${item.name}. Recuperi ${h} HP!`, '#0f8');
+    } else if (item.effect==='strkp') {
+      addEffect('Forza Potenziata', 'atk', item.power, 15, '#0af');
+    } else if (item.effect==='poison') {
+      p.poison += item.power;
+      msg(`Bevi ${item.name}. Sei avvelenato!`, '#f0f');
+    }
+    p.inv.splice(idx,1);
+    endTurn();
+  } else if (item.type==='weapon') {
+    if(p.weapon && p.weapon.cursed && !p.weapon._curseBroken){ msg("L'arma è maledetta! Non puoi toglierla!",'#c0f'); return; }
+    if (p.weapon) p.inv.push(p.weapon);
+    p.weapon=item; p.inv.splice(idx,1);
+    recalcStats();
+    msg(`Equipaggi: ${item.name}${item.ranged?' [ARCO - premi G per sparare]':'(ATK +'+item.power+')'}`, '#aaf'); checkSynergies();
+    endTurn();
+  } else if (item.type==='armor') {
+    if(p.armor && p.armor.cursed && !p.armor._curseBroken){ msg("L'armatura è maledetta! Non puoi toglierla!",'#c0f'); return; }
+    if (p.armor) p.inv.push(p.armor);
+    p.armor=item; p.inv.splice(idx,1);
+    recalcStats();
+    msg(`Indossi: ${item.name} (DEF +${item.power})`, '#0af'); checkSynergies();
+    endTurn();
+  } else if(item.type==='headgear'){
+    if(p.headgear && p.headgear.cursed && !p.headgear._curseBroken){ msg("L'oggetto è maledetto! Non puoi toglierlo!",'#c0f'); return; }
+    p.headgear = item;
+    p.inv.splice(idx,1);
+    msg(`Indossi ${item.name}`,'#4f4');
+    recalcStats(); checkSynergies();
+    endTurn();
+  } else if(item.type==='footwear'){
+    if(p.footwear && p.footwear.cursed && !p.footwear._curseBroken){ msg("L'oggetto è maledetto! Non puoi toglierlo!",'#c0f'); return; }
+    p.footwear = item;
+    p.inv.splice(idx,1);
+    msg(`Indossi ${item.name}`,'#4f4');
+    recalcStats(); checkSynergies();
+    endTurn();
+  } else if(item.type==='ring'){
+    if(!p.ring1){
+      p.ring1 = item; p.inv.splice(idx,1);
+      msg(`Indossi ${item.name} (anello sx)`,'#4f4');
+    } else if(!p.ring2){
+      p.ring2 = item; p.inv.splice(idx,1);
+      msg(`Indossi ${item.name} (anello dx)`,'#4f4');
+    } else {
+      if(p.ring1.cursed && !p.ring1._curseBroken){ msg("L'anello sx è maledetto! Non puoi toglierlo!",'#c0f'); return; }
+      const old = p.ring1;
+      p.ring1 = item; p.inv.splice(idx,1);
+      if(p.inv.length<12) p.inv.push(old); else msg(`${old.name} cade a terra`,'#f84');
+      msg(`Sostituisci anello sx con ${item.name}`,'#4f4');
+    }
+    recalcStats(); checkSynergies();
+    endTurn();
+  } else if (item.type==='ammo') {
+    msg(`${item.name}: ${item.qty} rimaste. Equipaggia un arco per usarle.`, '#fa0');
+    return;
+  } else if (item.type==='food') {
+    if (G.difficulty === 'hardcore') {
+      const before = p.hunger ?? 100;
+      if (before >= 100) { msg('Non hai fame — già sazio!', '#888'); return; }
+      if (item.rotten && Math.random() < 0.35) {
+        p.hunger = Math.min(100, before + Math.floor(item.power * 0.5));
+        p.poison += 5;
+        msg(`Mangi ${item.name}... era avariato! Avvelenato! Fame: ${p.hunger}/100`, '#f0f');
+      } else {
+        p.hunger = Math.min(100, before + item.power);
+        msg(`Mangi ${item.name}. Fame: ${p.hunger}/100`, '#fa0');
+      }
+    } else {
+      // Facile/Normale: guarisce un po' di HP
+      const h = Math.min(Math.max(1, Math.floor(item.power * 0.15)), p.maxHp - p.hp);
+      p.hp += h;
+      msg(`Mangi ${item.name}. ${h > 0 ? '+'+h+' HP' : '(già al massimo)'}`, '#fa0');
+    }
+    p.inv.splice(idx, 1);
+    endTurn();
+    return;
+  } else if (item.type==='recipe') {
+    if (G.knownExtraRecipes.has(item.recipeId)) {
+      msg(`Conosci già questa ricetta!`, '#888');
+    } else {
+      G.knownExtraRecipes.add(item.recipeId);
+      const rec = EXTRA_RECIPES.find(r=>r.id===item.recipeId);
+      p.inv.splice(idx,1);
+      msg(`✦ Ricetta appresa: ${rec ? rec.desc : item.name}!`, '#fa0');
+      msg(`  (Usa l'incudine & per fondere questi oggetti)`, '#f80');
+      SFX.pickup();
+    }
+    G.invOpen=false;
+    return;
+  } else if (item.type==='potion' && item.effect==='both') {
+    item.known=true;
+    const h = Math.min(item.power, p.maxHp-p.hp);
+    p.hp += h;
+    addEffect('Forza Potenziata','atk',3,15,'#0af');
+    msg(`Bevi ${item.name}. +${h} HP e forza potenziata!`, '#f0c');
+    p.inv.splice(idx,1);
+    endTurn();
+  }
+  G.invOpen=false;
+}
+
+// ─────────────────────────────────────────
+function dropItem(idx) {
+  const item = G.player.inv[idx];
+  if (!item) return;
+  G.player.inv.splice(idx,1);
+  item.x=G.player.x; item.y=G.player.y;
+  G.items.push(item);
+  const label = item.known ? item.name : (item.ch==='!'?'Pozione misteriosa':'Oggetto');
+  msg(`Butti a terra: ${label}`, '#888');
+  G.invOpen=false;
+}
+
+//  AI NEMICI
+// ─────────────────────────────────────────
+function enemyTurn() {
+  const p = G.player;
+  for (const e of G.entities) {
+    // Slowed: skip every other turn
+    if (e.slowed>0 && G.turn%2===0) continue;
+    // Feared: flee from player
+    if (e.feared>0) {
+      const dx=Math.sign(e.x-p.x), dy=Math.sign(e.y-p.y);
+      const nx=e.x+dx, ny=e.y+dy;
+      if (walkable(nx,ny)&&!entityAt(nx,ny)) { e.x=nx; e.y=ny; }
+      continue;
+    }
+    const dist = Math.abs(e.x-p.x)+Math.abs(e.y-p.y);
+    if (dist<=1) {
+      if (tryDodge(p.dodgePct)) {
+        msg(`Schivi l'attacco di ${e.name}!`, '#0ff'); SFX.dodge();
+      } else {
+        const d = dmg(e.atk, p.def);
+        p.hp -= d;
+        msg(`${e.name} ti attacca per ${d} danni!`, '#f44'); SFX.hurt();
+        // Frost reflect
+        const synFR = getSynergyBonuses();
+        if (synFR.frostReflect) {
+          const reflect = 2 + Math.floor(p.int*0.5);
+          e.hp -= reflect; msg(`Gelo riflesso: ${reflect} danni a ${e.name}!`, '#0af');
+          if (e.hp<=0) { killEnemy(e); continue; }
+        }
+        if (p.hp<=0) { G.dead=true; msg('SEI MORTO. Premi R per ricominciare.','#f00'); SFX.death(); return; }
+      }
+    } else if (dist<=e.sight && vis(e.x,e.y)) {
+      chasePlayer(e);
+    } else if (Math.random()<0.3) {
+      // random wander
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      const [dx,dy] = dirs[rndInt(4)];
+      const nx=e.x+dx, ny=e.y+dy;
+      if (walkable(nx,ny) && !entityAt(nx,ny)) { e.x=nx; e.y=ny; }
+    }
+  }
+}
+
+function chasePlayer(e) {
+  const p = G.player;
+  const dx = Math.sign(p.x-e.x), dy = Math.sign(p.y-e.y);
+  const moves = [];
+  if (dx!==0&&dy!==0) moves.push([dx,dy]);
+  if (dx!==0) moves.push([dx,0]);
+  if (dy!==0) moves.push([0,dy]);
+  moves.push([-dy,dx],[dy,-dx]); // perpendicular
+  for (const [mx,my] of moves) {
+    const nx=e.x+mx, ny=e.y+my;
+    if (walkable(nx,ny) && !entityAt(nx,ny) && !(nx===p.x&&ny===p.y)) {
+      e.x=nx; e.y=ny; return;
+    }
+  }
+}
+
+// ─────────────────────────────────────────
+//  END TURN
+// ─────────────────────────────────────────
+function endTurn() {
+  G.turn++;
+  tickEffects();
+  tickAbilityCDs();
+  const p = G.player;
+
+  // ── Difficoltà: Facile — regen passiva ──
+  if (G.difficulty === 'easy') {
+    if (G.turn % 8 === 0 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp+1);
+    if (G.turn % 5 === 0 && p.mp < p.maxMp) p.mp = Math.min(p.maxMp, p.mp+1);
+  }
+
+  // Magic item passive regen
+  if(p._magicHpRegen && G.turn%4===0) p.hp = Math.min(p.maxHp, p.hp+p._magicHpRegen);
+  if(p._magicMpRegen && G.turn%4===0) p.mp = Math.min(p.maxMp, p.mp+p._magicMpRegen);
+
+  // ── Difficoltà: Hardcore — fame ──
+  if (G.difficulty === 'hardcore') {
+    if (G.turn % 4 === 0) {
+      p.hunger = Math.max(0, (p.hunger ?? 100) - 1);
+      if (p.hunger === 60) msg('Hai fame. Cerca del cibo.', '#fa0');
+      else if (p.hunger === 30) msg('Hai molta fame!', '#f80');
+      else if (p.hunger === 10) msg('Stai morendo di fame!', '#f44');
+      else if (p.hunger === 0) {
+        p.hp = Math.max(0, p.hp - 2);
+        msg('Stai morendo di inedia! -2 HP', '#f44'); SFX.hurt();
+        if (p.hp <= 0) { G.dead = true; SFX.death(); msg('Sei morto di fame. Premi R.','#f00'); }
+      }
+    }
+  }
+
+  if (p.poison > 0) {
+    p.hp -= 1;
+    p.poison--;
+    if (p.hp <= 0) { G.dead=true; msg('Muori per avvelenamento. Premi R.','#f00'); }
+  }
+  if (!G.dead) enemyTurn();
+  computeFOV();
+  updateCam();
+}
+
+// ─────────────────────────────────────────
+//  CAMERA
+// ─────────────────────────────────────────
+function updateCam() {
+  const vw = Math.floor(canvas.width/TS);
+  const vh = Math.floor(canvas.height/TS);
+  G.camX = clamp(G.player.x - (vw>>1), 0, Math.max(0, COLS-vw));
+  G.camY = clamp(G.player.y - (vh>>1), 0, Math.max(0, ROWS-vh));
+}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function toScreen(tx,ty){return {sx:(tx-G.camX)*TS, sy:(ty-G.camY)*TS};}
+
+// ─────────────────────────────────────────
+//  RENDER
+// ─────────────────────────────────────────
+function loop() {
+  render();
+  updateHUD();
+}
+
+function render() {
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.font = FONT;
+  ctx.textBaseline='top';
+
+  if (G.victoryScreen){ renderVictory(); return; }
+  if (G.helpOpen) { renderHelp(); return; }
+  if (G.abilitiesOpen) { renderAbilitiesScreen(); renderHUD(); return; }
+  if (G.shopOpen) { renderShop(); renderHUD(); return; }
+  if (G.craftOpen) { renderCraft(); renderHUD(); return; }
+  if (G.lvlUp>0)  { renderLvlUp(); return; }
+  if (G.invOpen)  { renderInv();  renderHUD(); return; }
+  if (G.rangedMode) { renderMap(); renderItems(); renderEntities(); renderMerchant(); renderPlayer(); renderHotbar(); renderHUD(); renderMsgOverlay(); renderRangedOverlay(); return; }
+
+  renderMap();
+  renderItems();
+  renderEntities();
+  renderMerchant();
+  renderPlayer();
+  renderHotbar();
+  renderHUD();
+  renderMsgOverlay();
+
+  if (G.abilityTarget) renderTargetHint();
+  if (G.abilityChoices) { renderAbilityChoice(); return; }
+  if (G.dead) renderDeath();
+}
+
+function renderMap() {
+  const vw = Math.ceil(canvas.width/TS)+1;
+  const vh = Math.ceil(canvas.height/TS)+1;
+  for (let ty=G.camY; ty<Math.min(G.camY+vh,ROWS); ty++) {
+    for (let tx=G.camX; tx<Math.min(G.camX+vw,COLS); tx++) {
+      const isV = vis(tx,ty), isE = exp(tx,ty);
+      if (!isE) continue;
+      const t = G.map[ty][tx];
+      const {sx,sy} = toScreen(tx,ty);
+      let ch,col;
+      switch(t) {
+        case TILE.WALL:   ch='#'; col=isV?PAL.wall:PAL.wallD;   break;
+        case TILE.FLOOR:  ch='.'; col=isV?PAL.floor:PAL.floorD; break;
+        case TILE.STAIRS: ch='>'; col=isV?PAL.stair:PAL.stairD; break;
+        case TILE.ANVIL:  ch='&'; col=isV?'#fa0':'#640'; break;
+        default: continue;
+      }
+      ctx.fillStyle=col;
+      ctx.fillText(ch,sx,sy);
+    }
+  }
+}
+
+function renderItems() {
+  for (const item of G.items) {
+    if (!exp(item.x,item.y)) continue;
+    const isV = vis(item.x,item.y);
+    const {sx,sy} = toScreen(item.x,item.y);
+    ctx.fillStyle = isV ? item.col : dimColor(item.col);
+    ctx.fillText(item.ch, sx, sy);
+  }
+}
+
+function renderEntities() {
+  for (const e of G.entities) {
+    if (!vis(e.x,e.y)) continue;
+    const {sx,sy} = toScreen(e.x,e.y);
+    // hp bar
+    const bw=TS-2, hpf=e.hp/e.maxHp;
+    ctx.fillStyle='#300'; ctx.fillRect(sx,sy+TS-3,bw,2);
+    ctx.fillStyle=hpf>0.5?'#0f0':hpf>0.25?'#ff0':'#f00';
+    ctx.fillRect(sx,sy+TS-3,Math.max(1,Math.floor(bw*hpf)),2);
+    ctx.fillStyle=e.col;
+    ctx.fillText(e.ch,sx,sy);
+  }
+}
+
+function renderMerchant() {
+  if (!G.merchant) return;
+  const m = G.merchant;
+  if (!vis(m.x,m.y)&&!exp(m.x,m.y)) return;
+  const {sx,sy} = toScreen(m.x,m.y);
+  ctx.fillStyle = vis(m.x,m.y) ? '#f0c' : '#604';
+  ctx.font = BFONT;
+  ctx.fillText('M', sx, sy);
+  ctx.font = FONT;
+}
+
+function renderPlayer() {
+  const {sx,sy}=toScreen(G.player.x,G.player.y);
+  ctx.font=BFONT;
+  ctx.fillStyle=PAL.player;
+  ctx.fillText('@',sx,sy);
+  ctx.font=FONT;
+}
+
+function getAllHotbarAbilities() {
+  // 5 slot fissi (null = vuoto) + combo sinergie in coda
+  const p = G.player;
+  const main = p.hotbar.map(id => id ? p.abilities.find(a => a.id === id) || null : null);
+  const combos = getComboAbilities().map(s => { if (!s._cd) s._cd=0; return s; });
+  return [...main, ...combos];
+}
+
+function renderHotbar() {
+  const allAbs = getAllHotbarAbilities(); // 5 main (con null) + combos
+  const keys = ['Q','E','R','T','Y','U','O','P'];
+  const barY = 8;
+  // mostra sempre i 5 slot fissi + combo attive
+  const shown = allAbs.slice(0, keys.length);
+  const barX = canvas.width - shown.length * 60 - 10;
+  for (let i=0; i<shown.length; i++) {
+    const ab = shown[i];
+    const x = barX + i*60;
+    if (!ab) {
+      // Slot vuoto
+      ctx.fillStyle='#0d0d0d';
+      ctx.fillRect(x, barY, 55, 30);
+      ctx.strokeStyle='#2a2a2a';
+      ctx.lineWidth=1;
+      ctx.strokeRect(x, barY, 55, 30);
+      ctx.fillStyle='#444'; ctx.font='bold 10px Courier New';
+      ctx.fillText(keys[i], x+2, barY+10);
+      ctx.fillStyle='#2a2a2a'; ctx.font='10px Courier New';
+      ctx.fillText('vuoto', x+10, barY+22);
+      continue;
+    }
+    const onCD = ab._cd > 0;
+    const noMP = G.player.mp < ab.cost.mp;
+    const isCombo = ab.type === 'combo';
+    ctx.fillStyle = onCD ? '#1a1a2a' : noMP ? '#1a1010' : isCombo ? '#2a1a2a' : '#1a2a1a';
+    ctx.fillRect(x, barY, 55, 30);
+    ctx.strokeStyle = onCD ? '#666' : isCombo ? '#fa0' : '#0af';
+    ctx.lineWidth=1;
+    ctx.strokeRect(x, barY, 55, 30);
+    ctx.fillStyle = isCombo ? '#fa0' : '#ff6';
+    ctx.font='bold 10px Courier New';
+    ctx.fillText(keys[i], x+2, barY+10);
+    ctx.fillStyle = onCD ? '#999' : '#fff';
+    ctx.font='11px Courier New';
+    ctx.fillText(`${ab.icon}${ab.name.substring(0,5)}`, x+12, barY+10);
+    ctx.fillStyle='#888'; ctx.font='9px Courier New';
+    if (onCD) ctx.fillText(`CD:${ab._cd}`, x+2, barY+24);
+    else ctx.fillText(`MP:${ab.cost.mp}`, x+2, barY+24);
+  }
+  ctx.font=FONT;
+}
+
+function renderTargetHint() {
+  ctx.fillStyle='rgba(0,0,0,0.5)';
+  ctx.fillRect(canvas.width/2-120, 0, 240, 22);
+  ctx.fillStyle='#ff6';
+  ctx.font='bold 12px Courier New';
+  ctx.textAlign='center';
+  ctx.fillText('⬆ Scegli direzione (WASD/frecce) | Esc annulla', canvas.width/2, 15);
+  ctx.textAlign='left';
+  ctx.font=FONT;
+}
+
+function renderAbilityChoice() {
+  ctx.fillStyle='rgba(0,0,0,0.85)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const cx=canvas.width/2;
+  ctx.textAlign='center';
+  ctx.font='bold 22px Courier New';
+  ctx.fillStyle='#ff6';
+  ctx.fillText('SCEGLI UNA NUOVA ABILITÀ', cx, 60);
+  const ps = getPlaystyleLabel();
+  ctx.font='13px Courier New';
+  ctx.fillStyle='#fa0';
+  ctx.fillText(`Stile: ${ps.label}`, cx, 85);
+  ctx.fillStyle='#aaa';
+  ctx.font='11px Courier New';
+  ctx.fillText('(oppure premi [S] per saltare)', cx, 102);
+
+  const choices = G.abilityChoices;
+  choices.forEach((ab, i) => {
+    const y = 130 + i * 80;
+    ctx.fillStyle='#1a2a3a';
+    ctx.fillRect(cx-250, y, 500, 65);
+    ctx.strokeStyle='#0af';
+    ctx.lineWidth=1;
+    ctx.strokeRect(cx-250, y, 500, 65);
+    // Key
+    ctx.fillStyle='#ff6';
+    ctx.font='bold 18px Courier New';
+    ctx.fillText(`[${i+1}]`, cx-220, y+25);
+    // Icon + name
+    ctx.fillStyle='#fff';
+    ctx.font='bold 15px Courier New';
+    ctx.fillText(`${ab.icon} ${ab.name}`, cx-60, y+20);
+    // Desc
+    ctx.fillStyle='#aaa';
+    ctx.font='12px Courier New';
+    ctx.fillText(ab.desc, cx-60, y+40);
+    // Tags + cost
+    ctx.fillStyle='#0af';
+    ctx.font='10px Courier New';
+    ctx.fillText(`MP:${ab.cost.mp}  CD:${ab.cd}  [${ab.tags.join(', ')}]`, cx-60, y+55);
+  });
+
+  if (!choices.length) {
+    ctx.fillStyle='#aaa';
+    ctx.font='14px Courier New';
+    ctx.fillText('Nessuna abilità disponibile con le tue statistiche attuali.', cx, 180);
+    ctx.fillText('Premi un tasto per continuare.', cx, 210);
+  }
+
+  ctx.textAlign='left'; ctx.font=FONT;
+}
+
+function renderMsgOverlay() {
+  // Show last 2 messages in bottom-left corner of canvas
+  const recent = G.messages.slice(0,2);
+  for (let i=0; i<recent.length; i++) {
+    const m=recent[i];
+    ctx.fillStyle= i===0?m.col:'#666';
+    ctx.fillText(m.text, 8, canvas.height - (recent.length-i)*18 - 4);
+  }
+}
+
+function renderLvlUp() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  const cx=canvas.width/2, cy=canvas.height/2;
+  const p=G.player;
+  ctx.textAlign='center';
+
+  ctx.fillStyle='#ff0';
+  ctx.font='bold 28px Courier New';
+  ctx.fillText(`★ LIVELLO ${p.lv} ★`, cx, cy-140);
+
+  ctx.font='16px Courier New';
+  ctx.fillStyle='#aaa';
+  ctx.fillText(`Punti da distribuire: ${p.statPts}`, cx, cy-100);
+  ctx.fillText('Premi un tasto per migliorare una statistica:', cx, cy-70);
+
+  const opts=[
+    {key:'1', name:'FOR (Forza)',     val:p.str, desc:'→ ATK, danno fisico'},
+    {key:'2', name:'DES (Destrezza)', val:p.dex, desc:'→ critico%, schivata%'},
+    {key:'3', name:'INT (Intelletto)',val:p.int, desc:'→ potenza magia, MP'},
+    {key:'4', name:'VIT (Vitalità)',  val:p.vit, desc:'→ HP max, DEF'},
+    {key:'5', name:'VOL (Volontà)',   val:p.wil, desc:'→ MP max, res. status'},
+  ];
+  opts.forEach((o,i) => {
+    ctx.fillStyle='#0f8';
+    ctx.font='bold 14px Courier New';
+    ctx.fillText(`[${o.key}]  ${o.name}  ${o.val}`, cx-80, cy-20 + i*32);
+    ctx.fillStyle='#666';
+    ctx.font='12px Courier New';
+    ctx.fillText(o.desc, cx+120, cy-20 + i*32);
+  });
+
+  ctx.fillStyle='#bbb';
+  ctx.font='12px Courier New';
+  ctx.fillText(`HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}  ATK ${p.atk}  DEF ${p.def}  CRIT ${Math.floor(p.critPct)}%  SCHIV ${Math.floor(p.dodgePct)}%`, cx, cy+160);
+
+  ctx.textAlign='left';
+  ctx.font=FONT;
+}
+
+function renderInv(){
+  const p = G.player;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,W,H);
+  ctx.font='bold 15px monospace';
+
+  const lineH = 22;
+  let y = 24;
+
+  // Title
+  ctx.fillStyle='#ff0'; ctx.textAlign='center';
+  ctx.fillText('=== INVENTARIO ===', W/2, y); y+=lineH+4;
+  ctx.textAlign='left';
+
+  const totalRows = 6 + p.inv.length;
+  if(G.invCursor===undefined) G.invCursor=0;
+  G.invCursor = Math.max(0, Math.min(G.invCursor, totalRows-1));
+
+  // Equipment slots
+  const eqSlots = [
+    { label:'Arma     [a]', item: p.weapon   },
+    { label:'Armatura [r]', item: p.armor    },
+    { label:'Copricapo[^]', item: p.headgear },
+    { label:'Calzature[~]', item: p.footwear },
+    { label:'Anello sx[=]', item: p.ring1    },
+    { label:'Anello dx[=]', item: p.ring2    },
+  ];
+
+  ctx.font='14px monospace';
+  ctx.textBaseline='bottom';
+  const fontH = 16; // altezza visiva del font 14px
+  for(let i=0;i<eqSlots.length;i++){
+    const row = i;
+    const sel = G.invCursor===row;
+    if(sel){ ctx.fillStyle='#333'; ctx.fillRect(0, y-fontH, W, fontH+2); }
+    ctx.fillStyle = sel ? '#fff' : '#888';
+    ctx.fillText(eqSlots[i].label+': ', 8, y);
+    if(eqSlots[i].item){
+      const it = eqSlots[i].item;
+      ctx.fillStyle = it.rarityColor || (it.cursed ? '#c0f' : '#4f4');
+      let nm = it.name;
+      if(it.cursed && !it._curseBroken) nm += ` [MALEDETTO ${it.curseCharges}]`;
+      else if(it.cursed && it._curseBroken) nm += ' [liberato]';
+      ctx.fillText(nm, 160, y);
+      if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 160+nm.length*8, y); }
+    } else {
+      ctx.fillStyle='#444'; ctx.fillText('(vuoto)', 160, y);
+    }
+    if(sel && eqSlots[i].item){ ctx.fillStyle='#f84'; ctx.fillText('[X] drop', W-80, y); }
+    y+=lineH;
+  }
+
+  // Separator
+  ctx.fillStyle='#555';
+  ctx.fillRect(0,y-4,W,1); y+=8;
+  ctx.fillStyle='#888'; ctx.font='13px monospace';
+  ctx.fillText('--- Zaino ---', 8, y); y+=lineH;
+
+  // Backpack items
+  ctx.font='14px monospace';
+  for(let i=0;i<p.inv.length;i++){
+    const row = 6+i;
+    const sel = G.invCursor===row;
+    const it = p.inv[i];
+    if(sel){ ctx.fillStyle='#333'; ctx.fillRect(0, y-fontH, W, fontH+2); }
+    ctx.fillStyle = sel ? '#fff' : '#888';
+    ctx.fillText(`${i+1}.`, 8, y);
+    const label = it.known!==false ? it.name : 'Pozione misteriosa';
+    ctx.fillStyle = it.rarityColor || (it.type==='potion'?'#f4f':it.type==='weapon'?'#f84':it.type==='armor'?'#48f': it.col||'#4f4');
+    ctx.fillText(label, 32, y);
+    if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 32+label.length*8, y); }
+    if(it.qty){ ctx.fillStyle='#888'; ctx.fillText(` x${it.qty}`, 32+label.length*8+30, y); }
+    y+=lineH;
+  }
+  ctx.textBaseline='alphabetic';
+
+  // Ability hotbar (right column)
+  const rx = Math.floor(W * 0.55);
+  ctx.fillStyle='#0af'; ctx.font='bold 13px monospace';
+  ctx.fillText('── HOTBAR ──', rx, 46);
+  const hotkeys = ['Q','E','R','T','Y'];
+  const LH = 28;
+  p.hotbar.forEach((abId, i)=>{
+    const ab = abId ? p.abilities.find(a=>a.id===abId) : null;
+    const ay = 60 + i * LH;
+    ctx.fillStyle='#ff6'; ctx.font='bold 11px monospace';
+    ctx.fillText(`[${hotkeys[i]}]`, rx, ay);
+    if(ab){
+      ctx.fillStyle='#fff'; ctx.font='bold 11px monospace';
+      ctx.fillText(`${ab.icon} ${ab.name}`, rx+26, ay);
+    } else {
+      ctx.fillStyle='#555'; ctx.font='11px monospace';
+      ctx.fillText('— vuoto —', rx+26, ay);
+    }
+  });
+
+  // Footer
+  y = H-48;
+  ctx.fillStyle='#666'; ctx.font='12px monospace';
+  ctx.fillText('ArrowUp/Down muovi  [Invio] usa  [X] drop equipped  [I/Esc] chiudi', 8, y);
+  ctx.fillText(`Zaino: ${p.inv.length}/12  Oro: ${p.gold}`, 8, y+16);
+  ctx.font=FONT;
+}
+
+function renderVictory(){
+  const W=canvas.width, H=canvas.height;
+  ctx.fillStyle='#111'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+
+  ctx.font='bold 32px Courier New';
+  ctx.fillStyle='#ff0';
+  ctx.fillText('VITTORIA!', W/2, 80);
+
+  ctx.font='bold 20px Courier New';
+  ctx.fillStyle='#f80';
+  ctx.fillText('Italo trova il bagno!', W/2, 130);
+
+  ctx.font='15px Courier New';
+  ctx.fillStyle='#fff';
+  const lines = [
+    'Dopo aver attraversato piani di puro orrore discotecaro,',
+    'Italo spinge la porta con l\'insegna "EMERGENCY EXIT".',
+    '',
+    'Non era un\'uscita di emergenza.',
+    'Era il bagno delle donne.',
+    '',
+    'Ma era un bagno.',
+    'E ne aveva davvero bisogno.',
+    '',
+    `Piani esplorati: ${G.floor}`,
+    `Nemici sconfitti: ${G.player.kills||0}`,
+    `Oro trovato: ${G.player.gold}`,
+    `Livello raggiunto: ${G.player.lv}`,
+  ];
+  lines.forEach((l,i)=>{ ctx.fillText(l, W/2, 180+i*22); });
+
+  ctx.font='bold 16px Courier New';
+  ctx.fillStyle='#888';
+  ctx.fillText('[Invio] Nuova partita', W/2, H-40);
+  ctx.textAlign='left';
+}
+
+function renderDeath() {
+  ctx.fillStyle='rgba(0,0,0,0.72)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.textAlign='center';
+  ctx.font='bold 52px Courier New';
+  ctx.fillStyle='#f00';
+  ctx.fillText('SEI MORTO', canvas.width/2, canvas.height/2-24);
+  ctx.font='18px Courier New';
+  ctx.fillStyle='#888';
+  ctx.fillText(`Piano ${G.floor}  |  Livello ${G.player.lv}  |  Oro ${G.player.gold}`, canvas.width/2, canvas.height/2+24);
+  ctx.fillText('Premi R per ricominciare', canvas.width/2, canvas.height/2+54);
+  ctx.textAlign='left'; ctx.font=FONT;
+}
+
+function renderShop() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const p=G.player;
+  const m=G.merchant;
+
+  ctx.font='bold 20px Courier New';
+  ctx.fillStyle='#f0c';
+  ctx.fillText('═══ MERCANTE ═══', 40, 30);
+  ctx.fillStyle='#ff0';
+  ctx.font='13px Courier New';
+  ctx.fillText(`Oro: ${p.gold}`, 300, 30);
+
+  // Tab selector
+  ctx.fillStyle = G.shopTab==='buy' ? '#f0c' : '#aaa';
+  ctx.fillText('[B] COMPRA', 40, 55);
+  ctx.fillStyle = G.shopTab==='sell' ? '#f0c' : '#aaa';
+  ctx.fillText('[V] VENDI', 160, 55);
+  ctx.fillStyle = G.shopTab==='curse' ? '#c0f' : '#aaa';
+  ctx.fillText('[C] RIMUOVI MALEDIZIONE (150 oro)', 260, 55);
+
+  ctx.fillStyle='#888';
+  ctx.fillText('─'.repeat(50), 40, 68);
+
+  if (G.shopTab==='buy') {
+    if (!m.stock.length) {
+      ctx.fillStyle='#aaa'; ctx.fillText('(esaurito)', 40, 90);
+    }
+    m.stock.forEach((item,i) => {
+      const canBuy = p.gold >= item.price;
+      const isCursor = (i === G.shopCursor && G.shopTab==='buy');
+      if (isCursor) { ctx.fillStyle='#112211'; ctx.fillRect(34, 76+i*20, 380, 18); }
+      ctx.fillStyle = isCursor ? '#ff6' : '#555';
+      ctx.fillText('►', 36, 88+i*20);
+      ctx.fillStyle = canBuy ? (isCursor ? '#fff' : item.col) : '#888';
+      ctx.fillText(`${item.ch}  ${item.name}`, 50, 88 + i*20);
+      ctx.fillStyle = canBuy ? '#ff0' : '#888';
+      ctx.fillText(`${item.price} oro`, 280, 88 + i*20);
+      const rangedInfo = item.ranged ? ` [Arco R:${item.range}]` : '';
+      if (item.type==='weapon') { ctx.fillStyle='#888'; ctx.fillText(`ATK +${item.power}${rangedInfo}`, 370, 88+i*20); }
+      if (item.type==='armor')  { ctx.fillStyle='#888'; ctx.fillText(`DEF +${item.power}`, 370, 88+i*20); }
+      if (item.type==='ammo')   { ctx.fillStyle='#888'; ctx.fillText(`x${item.qty}`, 370, 88+i*20); }
+    });
+  } else if (G.shopTab==='sell') {
+    if (!p.inv.length) {
+      ctx.fillStyle='#aaa'; ctx.fillText('(inventario vuoto)', 40, 90);
+    }
+    p.inv.forEach((item,i) => {
+      const sellPrice = getSellPrice(item);
+      const label = item.known ? item.name : 'Oggetto sconosciuto';
+      const isCursor = (i === G.shopCursor && G.shopTab==='sell');
+      if (isCursor) { ctx.fillStyle='#112211'; ctx.fillRect(34, 76+i*20, 380, 18); }
+      ctx.fillStyle = isCursor ? '#ff6' : '#555';
+      ctx.fillText('►', 36, 88+i*20);
+      ctx.fillStyle = isCursor ? '#fff' : item.col;
+      ctx.fillText(`${item.ch}  ${label}`, 50, 88 + i*20);
+      ctx.fillStyle='#ff0';
+      ctx.fillText(`→ ${sellPrice} oro`, 280, 88 + i*20);
+    });
+  }
+
+  if(G.shopTab==='curse'){
+    const cursedSlot = [p.weapon,p.armor,p.headgear,p.footwear,p.ring1,p.ring2].find(s=>s&&s.cursed&&!s._curseBroken);
+    ctx.fillStyle='#aaa'; ctx.font='13px Courier New';
+    if(!cursedSlot){
+      ctx.fillText('Non hai oggetti maledetti equipaggiati.', 40, 95);
+    } else {
+      ctx.fillStyle='#c0f';
+      ctx.fillText(`Oggetto maledetto trovato: ${cursedSlot.name} (${cursedSlot.curseCharges} cariche)`, 40, 95);
+      ctx.fillStyle= p.gold>=150 ? '#0f8' : '#f44';
+      ctx.fillText(`Costo rimozione: 150 oro (hai: ${p.gold})`, 40, 115);
+      ctx.fillStyle='#aaa';
+      ctx.fillText('[Invio] per rimuovere la maledizione', 40, 135);
+    }
+  }
+
+  ctx.fillStyle='#999';
+  ctx.font='12px Courier New';
+  ctx.fillText('↑↓: naviga  |  Enter: compra/vendi  |  [B] compra  |  [V] vendi  |  [C] maledizione  |  Esc: esci', 40, canvas.height-20);
+  ctx.font=FONT;
+}
+
+function getSellPrice(item) {
+  if (item.type==='weapon') return 5 + item.power * 4;
+  if (item.type==='armor') return 5 + item.power * 5;
+  if (item.type==='potion') return 5;
+  return 3;
+}
+
+function shopBuy(idx) {
+  const m=G.merchant, p=G.player;
+  const item = m.stock[idx];
+  if (!item) return;
+  if (p.gold < item.price) { msg('Non hai abbastanza oro!','#f44'); return; }
+  if (p.inv.length>=12) { msg('Inventario pieno!','#f44'); return; }
+  p.gold -= item.price;
+  p.inv.push({...item});
+  m.stock.splice(idx,1);
+  msg(`Compri: ${item.name} (-${item.price} oro)`, '#f0c'); SFX.pickup();
+}
+
+function shopSell(idx) {
+  const p=G.player;
+  const item = p.inv[idx];
+  if (!item) return;
+  const price = getSellPrice(item);
+  p.gold += price;
+  p.inv.splice(idx,1);
+  msg(`Vendi: ${item.known?item.name:'oggetto'} (+${price} oro)`, '#ff0'); SFX.pickup();
+}
+
+function renderCraft() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const p=G.player;
+
+  ctx.font='bold 20px Courier New';
+  ctx.fillStyle='#fa0';
+  ctx.fillText('═══ INCUDINE DI FUSIONE ═══', 40, 30);
+
+  ctx.font='13px Courier New';
+  ctx.fillStyle='#aaa';
+  ctx.fillText('Seleziona due oggetti per fonderli:', 40, 55);
+
+  if (!p.inv.length) {
+    ctx.fillStyle='#aaa'; ctx.fillText('(inventario vuoto)', 40, 85);
+  }
+  p.inv.forEach((it,i) => {
+    const label = it.known ? it.name : (it.ch==='!'?'Pozione misteriosa':'Oggetto');
+    const selected = (i===G.craftSelect);
+    const isCursor = (i===G.craftCursor);
+    if (isCursor && !selected) { ctx.fillStyle='#0d1a0d'; ctx.fillRect(34, 70+i*20, 300, 18); }
+    ctx.fillStyle = selected ? '#ff0' : (isCursor ? '#ff6' : '#555');
+    ctx.fillText(selected ? '●' : (isCursor ? '►' : ' '), 36, 82+i*20);
+    const ammoSuffix = it.type==='ammo' ? ` (${it.qty})` : '';
+    ctx.fillStyle = selected ? '#ff0' : (isCursor ? '#fff' : it.col);
+    ctx.fillText(`${it.ch}  ${label}${ammoSuffix}`, 50, 82 + i*20);
+  });
+
+  if (G.craftSelect>=0) {
+    ctx.fillStyle='#fa0';
+    ctx.fillText(`Primo oggetto: ${p.inv[G.craftSelect]?.name||'?'} — ora scegli il secondo`, 40, canvas.height-50);
+  }
+
+  // Show known recipes
+  ctx.fillStyle='#aaa';
+  ctx.font='bold 11px Courier New';
+  ctx.fillText('Ricette note:', 400, 55);
+  ctx.font='10px Courier New';
+  let ry = 70;
+  FUSION_RECIPES.forEach((r) => {
+    ctx.fillStyle='#ccc';
+    ctx.fillText(`${r.input[0]} + ${r.input[1]} → ${r.output.name}`, 400, ry);
+    ry+=14;
+  });
+  const extraKnown = EXTRA_RECIPES.filter(r=>(G.knownExtraRecipes||new Set()).has(r.id));
+  if (extraKnown.length) {
+    ry+=4;
+    ctx.fillStyle='#fa0'; ctx.font='bold 10px Courier New';
+    ctx.fillText('Ricette scoperte:', 400, ry); ry+=14;
+    ctx.font='10px Courier New';
+    extraKnown.forEach((r) => {
+      ctx.fillStyle='#f80';
+      ctx.fillText(`★ ${r.input[0]} + ${r.input[1]} → ${r.output.name}`, 400, ry);
+      ry+=14;
+    });
+  }
+  // Hint sperimentazione
+  ctx.fillStyle='#888'; ctx.font='10px Courier New';
+  ctx.fillText('Prova a combinare qualsiasi oggetto:', 400, ry+8);
+  ctx.fillText('potresti scoprire nuove ricette... o esplodere!', 400, ry+20);
+
+  ctx.fillStyle='#999';
+  ctx.font='12px Courier New';
+  ctx.fillText('↑↓: naviga  |  Enter: seleziona  |  Esc: esci  |  ~: scroll ricetta (raccogli e usa)', 40, canvas.height-20);
+  ctx.font=FONT;
+}
+
+function renderAbilitiesScreen() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const p = G.player;
+  const hotkeys = ['Q','E','R','T','Y'];
+
+  // Titolo
+  ctx.font='bold 18px Courier New';
+  ctx.fillStyle='#ff6';
+  ctx.fillText('══ GESTIONE ABILITÀ ══', 30, 26);
+  ctx.fillStyle='#999'; ctx.font='11px Courier New';
+  ctx.fillText(`${p.abilities.length}/15 abilità apprese`, 30, 42);
+
+  // ─── COLONNA SINISTRA: lista tutte le abilità ───
+  ctx.fillStyle='#0af'; ctx.font='bold 12px Courier New';
+  ctx.fillText('COLLEZIONE:', 30, 60);
+
+  let ay = 76;
+  p.abilities.forEach((ab, i) => {
+    const isCursor = (i === G.abilityCursor);
+    const slotIdx = p.hotbar.indexOf(ab.id);
+    const slotKey = slotIdx >= 0 ? hotkeys[slotIdx] : null;
+    const rowH = isCursor ? 34 : 20;
+
+    // Sfondo cursore
+    if (isCursor) {
+      ctx.fillStyle='#102020';
+      ctx.fillRect(24, ay-14, canvas.width/2-30, rowH+2);
+    }
+
+    // Cursore
+    ctx.fillStyle = isCursor ? '#ff6' : '#666';
+    ctx.font='bold 12px Courier New';
+    ctx.fillText('►', 28, ay);
+
+    // Badge slot
+    if (slotKey) {
+      ctx.fillStyle='#fa0'; ctx.font='bold 10px Courier New';
+      ctx.fillText(`[${slotKey}]`, 42, ay);
+    } else {
+      ctx.fillStyle='#555'; ctx.font='10px Courier New';
+      ctx.fillText('[ ]', 42, ay);
+    }
+
+    // Nome
+    ctx.fillStyle = isCursor ? '#fff' : '#aaa';
+    ctx.font = isCursor ? 'bold 12px Courier New' : '12px Courier New';
+    ctx.fillText(`${ab.icon} ${ab.name}`, 68, ay);
+
+    // MP/CD
+    ctx.fillStyle='#888'; ctx.font='10px Courier New';
+    ctx.fillText(`MP:${ab.cost.mp} CD:${ab.cd}`, 230, ay);
+
+    // Descrizione (solo riga corrente)
+    if (isCursor) {
+      ctx.fillStyle='#8af'; ctx.font='10px Courier New';
+      ctx.fillText(ab.desc, 68, ay+14);
+    }
+
+    ay += rowH;
+  });
+
+  if (!p.abilities.length) {
+    ctx.fillStyle='#999'; ctx.font='12px Courier New';
+    ctx.fillText('(nessuna abilità appresa)', 50, 90);
+  }
+
+  // ─── COLONNA DESTRA: 5 slot hotbar ───
+  const rx = Math.floor(canvas.width * 0.52);
+  ctx.fillStyle='#0af'; ctx.font='bold 12px Courier New';
+  ctx.fillText('SLOT HOTBAR (Q-E-R-T-Y):', rx, 60);
+
+  p.hotbar.forEach((abId, i) => {
+    const ab = abId ? p.abilities.find(a => a.id === abId) : null;
+    const sy = 76 + i * 48;
+
+    ctx.fillStyle = ab ? '#112211' : '#0d0d0d';
+    ctx.fillRect(rx, sy-14, canvas.width - rx - 20, 42);
+    ctx.strokeStyle = ab ? '#0af' : '#333';
+    ctx.lineWidth=1;
+    ctx.strokeRect(rx, sy-14, canvas.width - rx - 20, 42);
+
+    ctx.fillStyle='#ff6'; ctx.font='bold 14px Courier New';
+    ctx.fillText(`[${i+1}/${hotkeys[i]}]`, rx+6, sy);
+
+    if (ab) {
+      ctx.fillStyle='#fff'; ctx.font='bold 11px Courier New';
+      ctx.fillText(`${ab.icon} ${ab.name}`, rx+70, sy);
+      ctx.fillStyle='#aaa'; ctx.font='10px Courier New';
+      ctx.fillText(ab.desc, rx+70, sy+14);
+    } else {
+      ctx.fillStyle='#777'; ctx.font='11px Courier New';
+      ctx.fillText('— vuoto —', rx+70, sy);
+      ctx.fillStyle='#666'; ctx.font='10px Courier New';
+      ctx.fillText('seleziona abilità e premi 1-5', rx+70, sy+13);
+    }
+  });
+
+  // Footer
+  ctx.fillStyle='#999'; ctx.font='11px Courier New';
+  ctx.textAlign='center';
+  ctx.fillText('↑↓: naviga  |  1-5: equipaggia in slot  |  X: rimuovi da slot  |  F / Esc: chiudi', canvas.width/2, canvas.height-12);
+  ctx.textAlign='left'; ctx.font=FONT;
+}
+
+function renderHelp() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const cx=canvas.width/2;
+  ctx.textAlign='center';
+  ctx.font='bold 20px Courier New';
+  ctx.fillStyle='#ff6';
+  ctx.fillText('═══ AIUTO ═══', cx, 24);
+
+  // Left column
+  const col1 = [
+    ['MOVIMENTO',''],
+    ['W/S/A/D  o  ↑↓←→','Muovi'],
+    ['Y U B N','Diagonali'],
+    ['',''],
+    ['AZIONI',''],
+    ['. / Z','Attendi un turno'],
+    ['>','Scendi le scale'],
+    ['I','Inventario'],
+    ['? / F1','Aiuto'],
+    ['R','Ricomincia (morte)'],
+    ['',''],
+    ['INVENTARIO',''],
+    ['0-9','Usa/equipaggia'],
+    ['D + 0-9','Butta oggetto'],
+    ['',''],
+    ['ABILITÀ',''],
+    ['F','Gestisci abilità (slot)'],
+    ['Q E R T Y','Usa abilità slot 1-5'],
+    ['U O P','Combo (sinergie)'],
+  ];
+
+  // Right column
+  const col2 = [
+    ['COMBATTIMENTO',''],
+    ['','Cammina verso nemico'],
+    ['',''],
+    ['SINERGIE',''],
+    ['','Combo abilità → sinergie'],
+    ['','Passive: bonus auto'],
+    ['','Combo: nuove abilità'],
+    ['','Incudine (&): fondi oggetti'],
+    ['',''],
+    ['SIMBOLI',''],
+    ['@  Giocatore','#  Muro'],
+    ['.  Pavimento','>  Scale'],
+    ['!  Pozione','$  Oro'],
+    [')  Arma','[  Armatura'],
+    ['M  Mercante','&  Incudine'],
+    ['r g O T','Nemici'],
+  ];
+
+  ctx.font='12px Courier New';
+  const lh=16, startY=50;
+  const drawCol = (lines, ox) => {
+    let y=startY;
+    for (const [left,right] of lines) {
+      if (!left&&!right) { y+=6; continue; }
+      if (!right && left===left.toUpperCase() && left.length>2) {
+        ctx.fillStyle='#0f8'; ctx.font='bold 12px Courier New';
+        ctx.fillText(left, ox+100, y);
+        ctx.font='12px Courier New';
+      } else {
+        ctx.textAlign='right';
+        ctx.fillStyle='#ff6'; ctx.fillText(left, ox+90, y);
+        ctx.textAlign='left';
+        ctx.fillStyle='#aaa'; ctx.fillText(right, ox+100, y);
+      }
+      y+=lh;
+    }
+  };
+
+  drawCol(col1, 20);
+  drawCol(col2, canvas.width/2 + 10);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#aaa';
+  ctx.fillText('Premi un tasto per chiudere', cx, canvas.height-12);
+  ctx.textAlign='left'; ctx.font=FONT;
+}
+
+// ─────────────────────────────────────────
+//  HUD (barra sotto il canvas)
+// ─────────────────────────────────────────
+function updateHUD() {
+  const p=G.player;
+  const hpCol = p.hp>p.maxHp*0.5?'#0f0':p.hp>p.maxHp*0.25?'#ff0':'#f44';
+  const mpCol = p.mp>p.maxMp*0.3?'#48f':'#f44';
+  document.getElementById('hud-hp').innerHTML=`<span style="color:${hpCol}">HP ${p.hp}/${p.maxHp}</span>`;
+  document.getElementById('hud-mp').innerHTML=`<span style="color:${mpCol}">MP ${p.mp}/${p.maxMp}</span>`;
+  document.getElementById('hud-atk').textContent=`ATK ${p.atk}`;
+  document.getElementById('hud-def').textContent=`DEF ${p.def}`;
+  document.getElementById('hud-lv').textContent=`Lv ${p.lv}`;
+  document.getElementById('hud-xp').textContent=`XP ${p.xp}/${p.xpNext}`;
+  document.getElementById('hud-floor').textContent=`Piano ${G.floor}`;
+  document.getElementById('hud-gold').textContent=`Oro ${p.gold}`;
+  document.getElementById('hud-poison').style.display = p.poison>0?'':'none';
+  // Fame (solo Hardcore)
+  const hungerEl = document.getElementById('hud-hunger');
+  if (G.difficulty === 'hardcore' && p.hunger !== undefined) {
+    const h = p.hunger;
+    const hCol = h > 60 ? '#8f8' : h > 30 ? '#fa0' : '#f44';
+    hungerEl.innerHTML = ` | <span style="color:${hCol}">🍗 ${h}/100</span>`;
+    hungerEl.style.display = '';
+  } else { hungerEl.style.display = 'none'; }
+  // Badge difficoltà
+  const diffEl = document.getElementById('hud-difficulty');
+  if (diffEl) {
+    const dmap = {easy:'[FACILE]', normal:'', hardcore:'[HARDCORE]'};
+    const dcol = {easy:'#8f8', normal:'', hardcore:'#f44'};
+    const d = G.difficulty || 'normal';
+    diffEl.innerHTML = dmap[d] ? `<span style="color:${dcol[d]};font-size:10px"> ${dmap[d]}</span>` : '';
+  }
+  const effText = p.effects.map(e=>`${e.name}(${e.turns})`).join(' ');
+  document.getElementById('hud-effects').textContent = effText ? ` ${effText}` : '';
+  const synText = (G.activeSynergies||[]).map(s=>s.icon||'★').join('');
+  document.getElementById('hud-synergies').textContent = synText ? ` ${synText}` : '';
+  document.getElementById('hud-synergies').title = (G.activeSynergies||[]).map(s=>s.name).join(', ');
+  renderMsgBox();
+}
+
+function renderHUD() { updateHUD(); }
+
+function renderMsgBox() {
+  const box=document.getElementById('msgbox');
+  box.innerHTML = G.messages.slice(0,6).map((m,i)=>{
+    const op = Math.max(0.15, 1-i*0.18);
+    return `<div class="msg" style="color:${m.col};opacity:${op}">${m.text}</div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────
+//  UTILITÀ COLORE
+// ─────────────────────────────────────────
+function dimColor(hex) {
+  // parse #rrggbb and halve each component
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  const d=(v)=>Math.floor(v*0.35).toString(16).padStart(2,'0');
+  return `#${d(r)}${d(g)}${d(b)}`;
+}
+
+// ─────────────────────────────────────────
+//  INPUT
+// ─────────────────────────────────────────
+const MOVE_KEYS = {
+  'ArrowUp':[-1],'ArrowDown':[1],'ArrowLeft':[-1,0],'ArrowRight':[1,0], // handled below
+};
+
+function dirFromKey(key) {
+  switch(key) {
+    case 'ArrowUp': case 'w': case 'W': return [0,-1];
+    case 'ArrowDown': case 's': case 'S': return [0,1];
+    case 'ArrowLeft': case 'a': case 'A': return [-1,0];
+    case 'ArrowRight': case 'd': case 'D': return [1,0];
+  }
+  return null;
+}
+
+document.addEventListener('keydown', e=>{
+  if (!_jinglePlayed) playTitleJingle();
+  if (titleScreen) { titleInput(e); return; }
+
+  // Victory screen
+  if (G.victoryScreen){
+    if(e.key==='Enter'){ deleteSave(); newGame(); }
+    return;
+  }
+
+  // Pending victory (boss just killed)
+  if(G.pendingVictory){
+    if(e.key==='Enter'){ G.pendingVictory=false; G.victoryScreen=true; loop(); return; }
+    if(e.key==='c'||e.key==='C'){ G.pendingVictory=false; msg("Continui a esplorare i piani piu' profondi...",'#888'); loop(); return; }
+    return;
+  }
+
+  if (G.dead) {
+    if (e.key==='r'||e.key==='R') { deleteSave(); newGame(); }
+    return;
+  }
+
+  // Help screen
+  if (G.helpOpen) { G.helpOpen=false; loop(); return; }
+
+  // Schermata gestione abilità
+  if (G.abilitiesOpen) {
+    const p = G.player;
+    if (e.key==='Escape'||e.key==='f'||e.key==='F') {
+      G.abilitiesOpen=false;
+    } else if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') {
+      G.abilityCursor = Math.max(0, G.abilityCursor-1);
+    } else if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') {
+      G.abilityCursor = Math.min(p.abilities.length-1, G.abilityCursor+1);
+    } else if (['1','2','3','4','5'].includes(e.key)) {
+      const slot = parseInt(e.key)-1;
+      const ab = p.abilities[G.abilityCursor];
+      if (ab) {
+        // rimuovi da eventuale slot precedente
+        const old = p.hotbar.indexOf(ab.id);
+        if (old>=0) p.hotbar[old]=null;
+        p.hotbar[slot]=ab.id;
+        msg(`${ab.name} → slot ${'QERTY'[slot]}`, '#0af');
+      }
+    } else if (e.key==='x'||e.key==='X') {
+      const ab = p.abilities[G.abilityCursor];
+      if (ab) {
+        const slot = p.hotbar.indexOf(ab.id);
+        if (slot>=0) { p.hotbar[slot]=null; msg(`${ab.name} rimosso dallo slot`, '#888'); }
+        else msg(`${ab.name} non era equipaggiata`, '#666');
+      }
+    }
+    e.preventDefault(); loop(); return;
+  }
+
+  // Ability choice screen (after level up)
+  if (G.abilityChoices) {
+    const choices = G.abilityChoices;
+    if (e.key==='s'||e.key==='S'||e.key==='Escape') {
+      G.abilityChoices=null; msg('Salti la scelta abilità.','#888');
+    } else {
+      const idx=parseInt(e.key)-1;
+      if (idx>=0 && idx<choices.length) {
+        const ab = {...choices[idx], _cd:0};
+        if (G.player.abilities.length<15) {
+          G.player.abilities.push(ab);
+          // Auto-equip nel primo slot libero
+          const emptySlot = G.player.hotbar.indexOf(null);
+          if (emptySlot >= 0) G.player.hotbar[emptySlot] = ab.id;
+          msg(`Apprendi: ${ab.name}!${emptySlot>=0?' (slot '+'QERTY'[emptySlot]+')':''}`, '#0af'); SFX.levelup();
+          checkSynergies();
+        } else { msg('Hai già 15 abilità! (max raggiunto)','#f44'); }
+        G.abilityChoices=null;
+      }
+    }
+    loop(); return;
+  }
+
+  // Level up stat screen
+  if (G.lvlUp>0) {
+    const p=G.player;
+    if (e.key==='1') { p.str++; spendPt(); }
+    else if (e.key==='2') { p.dex++; spendPt(); }
+    else if (e.key==='3') { p.int++; spendPt(); }
+    else if (e.key==='4') { p.vit++; spendPt(); }
+    else if (e.key==='5') { p.wil++; spendPt(); }
+    recalcStats();
+    loop(); return;
+  }
+
+  // Ranged targeting mode
+  if (G.rangedMode) {
+    if (e.key==='Escape') {
+      G.rangedMode=false; G.rangedTarget=null; G.rangedItem=null;
+      msg('Mira annullata.','#888');
+    } else if (e.key==='Enter') {
+      const t=G.rangedTarget;
+      if (t) {
+        if (G.rangedItem) {
+          doThrowItem(G.rangedItem, t.x, t.y);
+        } else {
+          doShoot(t.x, t.y);
+        }
+        G.rangedMode=false; G.rangedTarget=null; G.rangedItem=null;
+      }
+    } else {
+      const dir=dirFromKey(e.key);
+      if (dir && G.rangedTarget) {
+        G.rangedTarget = {x: G.rangedTarget.x+dir[0], y: G.rangedTarget.y+dir[1]};
+        G.rangedTarget.x = Math.max(0,Math.min(COLS-1,G.rangedTarget.x));
+        G.rangedTarget.y = Math.max(0,Math.min(ROWS-1,G.rangedTarget.y));
+      }
+    }
+    e.preventDefault(); loop(); return;
+  }
+
+  // Ability targeting mode
+  if (G.abilityTarget) {
+    if (e.key==='Escape') {
+      // Cancel: refund
+      const t=G.abilityTarget; G.abilityTarget=null;
+      G.player.mp+=t.ab.cost.mp; t.ab._cd=0;
+      msg('Abilità annullata.','#888');
+      loop(); return;
+    }
+    const dir=dirFromKey(e.key);
+    if (dir) { resolveAbilityTarget(dir[0],dir[1]); e.preventDefault(); loop(); return; }
+    return;
+  }
+
+  // Crafting screen
+  if (G.craftOpen) {
+    if (e.key==='Escape') { G.craftOpen=false; G.craftSelect=-1; G.craftCursor=0; }
+    else if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') {
+      G.craftCursor = Math.max(0, G.craftCursor-1);
+    } else if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') {
+      G.craftCursor = Math.min(Math.max(0,G.player.inv.length-1), G.craftCursor+1);
+    } else if (e.key==='Enter') {
+      const idx = G.craftCursor;
+      if (idx>=0 && idx<G.player.inv.length) {
+        if (G.craftSelect<0) {
+          G.craftSelect=idx;
+          msg(`Primo: ${G.player.inv[idx].name}. Scegli il secondo e premi Invio.`, '#fa0');
+        } else if (idx===G.craftSelect) {
+          G.craftSelect=-1; msg('Selezione annullata.','#888');
+        } else {
+          const ok = doFusion(G.craftSelect, idx);
+          G.craftSelect=-1; G.craftCursor=0;
+          if (ok) { G.craftOpen=false; recalcStats(); }
+        }
+      }
+    } else {
+      const idx=parseInt(e.key);
+      if (!isNaN(idx) && idx>=0 && idx<G.player.inv.length) {
+        G.craftCursor=idx;
+        if (G.craftSelect<0) { G.craftSelect=idx; }
+        else if (idx===G.craftSelect) { G.craftSelect=-1; }
+        else {
+          const ok = doFusion(G.craftSelect, idx);
+          G.craftSelect=-1;
+          if (ok) { G.craftOpen=false; recalcStats(); }
+        }
+      }
+    }
+    loop(); return;
+  }
+
+  // Shop screen
+  if (G.shopOpen) {
+    const list = G.shopTab==='buy' ? (G.merchant?.stock||[]) : G.player.inv;
+    if (e.key==='Escape') G.shopOpen=false;
+    else if (e.key==='b'||e.key==='B') { G.shopTab='buy'; G.shopCursor=0; }
+    else if (e.key==='v'||e.key==='V') { G.shopTab='sell'; G.shopCursor=0; }
+    else if (e.key==='c'||e.key==='C') { G.shopTab='curse'; G.shopCursor=0; }
+    else if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') {
+      G.shopCursor = Math.max(0, G.shopCursor-1);
+    } else if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') {
+      G.shopCursor = Math.min(Math.max(0,list.length-1), G.shopCursor+1);
+    } else if (e.key==='Enter') {
+      if (G.shopTab==='buy') shopBuy(G.shopCursor);
+      else if (G.shopTab==='sell') shopSell(G.shopCursor);
+      else if (G.shopTab==='curse') {
+        const cursedSlot = [G.player.weapon,G.player.armor,G.player.headgear,G.player.footwear,G.player.ring1,G.player.ring2].find(s=>s&&s.cursed&&!s._curseBroken);
+        if(!cursedSlot){ msg("Non hai oggetti maledetti equipaggiati",'#888'); }
+        else if(G.player.gold<150){ msg("Non hai abbastanza oro (150 richiesti)",'#f44'); }
+        else { G.player.gold-=150; cursedSlot._curseBroken=true; msg(`Il mercante rimuove la maledizione da ${cursedSlot.name}!`,'#c0f'); }
+      }
+    } else {
+      const idx=parseInt(e.key);
+      if (!isNaN(idx)&&idx>=0) {
+        G.shopCursor=idx;
+        if (G.shopTab==='buy') shopBuy(idx);
+        else if (G.shopTab==='sell') shopSell(idx);
+      }
+    }
+    loop(); return;
+  }
+
+  // Inventory screen
+  if (G.invOpen) {
+    const k = e.key;
+    const p = G.player;
+    if(k==='Escape'||k==='i'||k==='I'){ G.invOpen=false; G.invDrop=false; loop(); return; }
+    const totalRows = 6 + p.inv.length;
+    if(G.invCursor===undefined) G.invCursor=0;
+    if(k==='ArrowUp'||k==='w'||k==='W'){ G.invCursor=Math.max(0,G.invCursor-1); e.preventDefault(); loop(); return; }
+    if(k==='ArrowDown'||k==='s'||k==='S'){ G.invCursor=Math.min(totalRows-1,G.invCursor+1); e.preventDefault(); loop(); return; }
+
+    // X = drop equipped item or backpack item
+    if(k==='x'||k==='X'){
+      const eqSlotNames = ['weapon','armor','headgear','footwear','ring1','ring2'];
+      if(G.invCursor<6){
+        const slotName = eqSlotNames[G.invCursor];
+        const it = p[slotName];
+        if(!it){ loop(); return; }
+        if(it.cursed && !it._curseBroken){ msg("Oggetto maledetto! Non puoi toglierlo!",'#c0f'); loop(); return; }
+        p[slotName]=null;
+        G.items.push({...it, x:G.player.x, y:G.player.y});
+        msg(`Lasci cadere ${it.name}`,'#f84');
+        recalcStats();
+      } else {
+        const idx = G.invCursor-6;
+        if(idx<p.inv.length){
+          const it = p.inv.splice(idx,1)[0];
+          G.items.push({...it, x:G.player.x, y:G.player.y});
+          msg(`Lasci cadere ${it.name}`,'#f84');
+          if(G.invCursor>=6+p.inv.length) G.invCursor=Math.max(0,G.invCursor-1);
+        }
+      }
+      e.preventDefault(); loop(); return;
+    }
+
+    // Enter/Space = use/equip selected item
+    if(k==='Enter'||k===' '){
+      const eqSlotNames = ['weapon','armor','headgear','footwear','ring1','ring2'];
+      if(G.invCursor<6){
+        const slotName = eqSlotNames[G.invCursor];
+        const it = p[slotName];
+        if(!it){ loop(); return; }
+        if(it.cursed && !it._curseBroken){ msg(`${it.name}: maledetto! Uccidi ${it.curseCharges} nemici per liberarlo`,'#c0f'); loop(); return; }
+        if(p.inv.length<12){ p.inv.push(it); p[slotName]=null; msg(`Tolto ${it.name}`,'#888'); recalcStats(); }
+        else { msg("Zaino pieno!",'#f44'); }
+      } else {
+        const idx = G.invCursor-6;
+        if(idx<p.inv.length){
+          if(G.invDrop){ dropItem(idx); G.invDrop=false; }
+          else useItem(idx);
+        }
+      }
+      e.preventDefault(); loop(); return;
+    }
+
+    // D key: toggle drop mode
+    if(k==='d'||k==='D'){
+      if(G.invCursor>=6 && p.inv.length){
+        G.invDrop=true;
+        msg(`Premi Invio per buttare: ${p.inv[G.invCursor-6]?.name||'?'}  [Esc annulla]`,'#888');
+      }
+      loop(); return;
+    }
+
+    // G key: throw item
+    if(k==='g'||k==='G'){
+      if(G.invCursor>=6){
+        const it = p.inv[G.invCursor-6];
+        if(it){
+          G.rangedItem = {item:it, idx:G.invCursor-6};
+          G.rangedTarget = {x:p.x, y:p.y};
+          G.rangedMode = true;
+          G.invOpen = false;
+          G.invDrop = false;
+          msg(`Lancia ${it.name}: usa frecce per mirare, Invio per lanciare, Esc annulla`,'#fa0');
+        }
+      }
+      loop(); return;
+    }
+
+    // Number keys still work for backpack
+    const num = parseInt(k);
+    if(!isNaN(num)&&num>=1&&num<=9){
+      const idx = num-1;
+      if(idx<p.inv.length){ G.invCursor=6+idx; useItem(idx); }
+      e.preventDefault(); loop();
+      return;
+    }
+    loop(); return;
+  }
+
+  // Ability hotkeys: Q E R T Y U O P → slot 0-7
+  const abKeys = {q:0,e:1,r:2,t:3,y:4,u:5,o:6,p:7};
+  if (abKeys[e.key.toLowerCase()] !== undefined) {
+    useAbility(abKeys[e.key.toLowerCase()]);
+    e.preventDefault(); loop(); return;
+  }
+
+  let handled=true;
+  switch(e.key) {
+    case 'ArrowUp':  case 'w': case 'W': case 'k': tryMove( 0,-1); break;
+    case 'ArrowDown':case 's': case 'S': case 'j': tryMove( 0, 1); break;
+    case 'ArrowLeft':case 'a': case 'A': case 'h': tryMove(-1, 0); break;
+    case 'ArrowRight':case'd': case 'D': case 'l': tryMove( 1, 0); break;
+    case '.': case 'z': case 'Z': endTurn(); break;
+    case 'i': case 'I': G.invOpen=true; break;
+    case 'f': case 'F': G.abilitiesOpen=true; G.abilityCursor=0; break;
+    case '?': case 'F1': G.helpOpen=true; break;
+    case '>':
+      if (G.map[G.player.y][G.player.x]===TILE.STAIRS) {
+        G.floor++; buildFloor(); computeFOV(); updateCam();
+        msg(`Scendi al piano ${G.floor}...`, '#0ff'); SFX.stairs();
+        saveGame(); // auto-save on floor change
+      }
+      break;
+    case 'F5': saveGame(); break;
+    case 'g': case 'G':
+      // Shoot (arco equipaggiato) o lancia oggetto
+      if (G.player.weapon && G.player.weapon.ranged) {
+        const ammo=G.player.inv.find(i=>i.type==='ammo');
+        if (!ammo) { msg('Niente frecce/quadrelli!','#f44'); break; }
+        G.rangedMode=true;
+        G.rangedTarget={x:G.player.x, y:G.player.y};
+        G.rangedItem=null;
+        msg(`[${G.player.weapon.name}] Usa ↑↓←→ per mirare, Invio per sparare, Esc annulla`,'#0af');
+      } else {
+        // Lancia dal menu inventario
+        G.invOpen=true;
+        G.invDrop=false;
+        msg('Scegli cosa lanciare: [↑↓] naviga, [G] lancia, [Esc] annulla','#fa0');
+      }
+      break;
+    default: handled=false;
+  }
+  if (handled) { e.preventDefault(); loop(); }
+});
+
+function spendPt() {
+  G.player.statPts--;
+  if (G.player.statPts<=0) {
+    G.lvlUp--;
+    G.player.statPts=0;
+    // After stats, offer ability choice
+    if (G.lvlUp<=0) {
+      const choices = getAbilityChoices();
+      if (choices.length>0) G.abilityChoices = choices;
+    }
+  }
+}
+
+// ─────────────────────────────────────────
+//  RESIZE
+// ─────────────────────────────────────────
+function resize() {
+  canvas=document.getElementById('canvas');
+  ctx=canvas.getContext('2d');
+  const hud=document.getElementById('hud');
+  const msgEl=document.getElementById('msgbox');
+  canvas.width=window.innerWidth;
+  if (titleScreen) {
+    hud.style.display='none'; msgEl.style.display='none';
+    canvas.height=window.innerHeight;
+    renderTitle(); return;
+  }
+  hud.style.display=''; msgEl.style.display='';
+  const hRect = hud.getBoundingClientRect();
+  const mRect = msgEl.getBoundingClientRect();
+  canvas.height=window.innerHeight - hRect.height - mRect.height - 2;
+  updateCam();
+  loop();
+}
+
+window.addEventListener('resize', resize);
+
+// ─────────────────────────────────────────
+//  TITOLO + AVVIO
+// ─────────────────────────────────────────
+let titleScreen = true;
+
+function renderTitle() {
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  const cw=canvas.width/2, ch=canvas.height;
+  ctx.textAlign='center';
+
+  // Scala tutto in base all'altezza disponibile
+  const sc = Math.min(1, ch / 520);
+  let y = Math.round(40 * sc) + 10;
+
+  ctx.font=`bold ${Math.round(36*sc)}px Courier New`;
+  ctx.fillStyle='#ff6';
+  ctx.fillText('ITALODISCO', cw, y); y+=Math.round(32*sc);
+
+  ctx.font=`bold ${Math.round(13*sc)}px Courier New`;
+  ctx.fillStyle='#f0c';
+  ctx.fillText('— La vera storia di Italo Discobolo —', cw, y); y+=Math.round(24*sc);
+
+  const story = [
+    { text: 'Sei Italo. Stavi cercando il bagno al Megadisco Infernale', col: '#ccc' },
+    { text: 'quando hai aperto una porta con scritto "NON APRIRE".', col: '#ccc' },
+    { text: '', col: '#000' },
+    { text: 'Ora sei in un dungeon. Il DJ ride di te.', col: '#fa0' },
+    { text: 'Le tue ultime monete tintinnano in tasca.', col: '#fa0' },
+    { text: 'La musica si sente ancora, lontana.', col: '#888' },
+    { text: '', col: '#000' },
+    { text: '👟  Trova la via d\'uscita.', col: '#0f8' },
+  ];
+  const storyLH = Math.round(16*sc);
+  ctx.font=`${Math.round(12*sc)}px Courier New`;
+  story.forEach((line) => {
+    ctx.fillStyle = line.col;
+    ctx.fillText(line.text, cw, y); y+=storyLH;
+  });
+
+  y+=Math.round(18*sc);
+  ctx.font=`bold ${Math.round(13*sc)}px Courier New`;
+  ctx.fillStyle='#aaa';
+  ctx.fillText('── NUOVA PARTITA ──', cw, y); y+=Math.round(26*sc);
+
+  const optLH = Math.round(24*sc);
+  ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
+  ctx.fillStyle='#8f8';
+  ctx.fillText('[1] Facile', cw, y); y+=Math.round(14*sc);
+  ctx.font=`${Math.round(10*sc)}px Courier New`;
+  ctx.fillStyle='#6a6';
+  ctx.fillText('HP e MP si rigenerano lentamente', cw, y); y+=optLH;
+
+  ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
+  ctx.fillStyle='#ff6';
+  ctx.fillText('[2] Normale', cw, y); y+=Math.round(14*sc);
+  ctx.font=`${Math.round(10*sc)}px Courier New`;
+  ctx.fillStyle='#aa8';
+  ctx.fillText('roguelike classico — nessuna regen', cw, y); y+=optLH;
+
+  ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
+  ctx.fillStyle='#f44';
+  ctx.fillText('[3] Hardcore', cw, y); y+=Math.round(14*sc);
+  ctx.font=`${Math.round(10*sc)}px Courier New`;
+  ctx.fillStyle='#a44';
+  ctx.fillText('fame + nessuna regen — Italo soffre davvero', cw, y); y+=optLH;
+
+  if (hasSave()) {
+    ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
+    ctx.fillStyle='#0af';
+    ctx.fillText('[C] Continua — Italo non si arrende', cw, y); y+=optLH;
+  }
+
+  ctx.fillStyle='#555';
+  ctx.font=`${Math.round(10*sc)}px Courier New`;
+  ctx.fillText('F5: Salva  |  ?: Aiuto', cw, Math.max(y+10, ch-10));
+
+  ctx.textAlign='left'; ctx.font=FONT;
+}
+
+function titleInput(e) {
+  playTitleJingle();
+  const startNew = (diff) => {
+    titleScreen = false;
+    G.difficulty = diff;
+    deleteSave();
+    newGame();
+    resize();
+    const diffNames = {easy:'Facile 🟢', normal:'Normale 🟡', hardcore:'Hardcore 🔴'};
+    msg(`Difficoltà: ${diffNames[diff]}`, diff==='easy'?'#8f8':diff==='hardcore'?'#f44':'#ff6');
+  };
+  if (e.key==='1') startNew('easy');
+  else if (e.key==='2'||e.key==='n'||e.key==='N') startNew('normal');
+  else if (e.key==='3') startNew('hardcore');
+  else if ((e.key==='c' || e.key==='C') && hasSave()) {
+    titleScreen = false;
+    newGame();
+    loadGame();
+    resize();
+    loop();
+  }
+}
+
+canvas = document.getElementById('canvas');
+ctx = canvas.getContext('2d');
+resize();
+// Mostra sempre il titolo (selezione difficoltà + eventuale Continua)
+renderTitle();
+</script>
+</body>
+</html>
