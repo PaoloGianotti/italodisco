@@ -74,11 +74,12 @@ body {
 // ─────────────────────────────────────────
 //  COSTANTI
 // ─────────────────────────────────────────
-const TS    = 16;          // tile size px
+const TS    = 24;          // tile size px
 const COLS  = 80;
 const ROWS  = 42;
-const FONT  = '13px "Courier New",monospace';
-const BFONT = 'bold 13px "Courier New",monospace';
+const FONT  = '16px "Courier New",monospace';
+const BFONT = 'bold 16px "Courier New",monospace';
+const EFONT = '20px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif'; // emoji font
 
 const TILE = { VOID:0, WALL:1, FLOOR:2, STAIRS:3, ANVIL:4 };
 
@@ -320,20 +321,29 @@ const SFX = {
 //  DEFINIZIONI NEMICI
 // ─────────────────────────────────────────
 const ENEMY_DEFS = [
-  { ch:'r', name:'Ratto',      col:'#a66', hp:10, atk:4,  def:0, xp:5,   sight:5 },
-  { ch:'k', name:'Kobold',     col:'#6a6', hp:18, atk:6,  def:1, xp:10,  sight:6 },
-  { ch:'g', name:'Goblin',     col:'#5a3', hp:26, atk:9,  def:2, xp:18,  sight:7 },
-  { ch:'O', name:'Orco',       col:'#8a0', hp:45, atk:14, def:4, xp:35,  sight:7 },
-  { ch:'T', name:'Troll',      col:'#0a6', hp:70, atk:19, def:6, xp:65,  sight:6 },
-  { ch:'V', name:'Vampiro',    col:'#a0a', hp:58, atk:17, def:5, xp:90,  sight:9 },
-  { ch:'D', name:'Drago',      col:'#f60', hp:100,atk:25, def:10,xp:200, sight:10 },
-  { id:'boss', name:'Il DJ Infernale', ch:'@', col:'#f0f', hp:120, atk:18, def:8, xp:200, gold:100, sight:15, isBoss:true },
+  { ch:'🪳', name:'Scarafaggio',          col:'#864', hp:6,   atk:2,  def:0, xp:3,   sight:4 },
+  { ch:'🐀', name:'Ratto Maranza',        col:'#a66', hp:10,  atk:4,  def:0, xp:5,   sight:5 },
+  { ch:'🐈', name:'Gatto Randagio',       col:'#ca8', hp:14,  atk:5,  def:1, xp:8,   sight:6 },
+  { ch:'🐕', name:'Bull-Dog da Pista',    col:'#6a6', hp:18,  atk:6,  def:1, xp:10,  sight:6 },
+  { ch:'🍺', name:'Ubriaco Molesto',      col:'#a86', hp:22,  atk:8,  def:1, xp:14,  sight:5 },
+  { ch:'🧥', name:'Boomer Paninaro',      col:'#5a3', hp:28,  atk:10, def:2, xp:18,  sight:7 },
+  { ch:'🎤', name:'Cantante Stonato',     col:'#f8a', hp:34,  atk:11, def:2, xp:24,  sight:7 },
+  { ch:'🪩', name:'Palla Disco Impazzita',col:'#ff8', hp:40,  atk:13, def:3, xp:30,  sight:8 },
+  { ch:'💪', name:'Buttafuori',           col:'#8a0', hp:50,  atk:15, def:4, xp:38,  sight:7 },
+  { ch:'🐍', name:'Boa del Guardaroba',   col:'#6a4', hp:55,  atk:16, def:4, xp:45,  sight:8 },
+  { ch:'🦫', name:'Capibara Infernale',   col:'#0a6', hp:65,  atk:18, def:5, xp:55,  sight:6 },
+  { ch:'🔥', name:'Barman Infuocato',     col:'#f80', hp:72,  atk:20, def:6, xp:70,  sight:8 },
+  { ch:'💃', name:'Bad Girl',             col:'#a0a', hp:60,  atk:19, def:5, xp:80,  sight:9 },
+  { ch:'🦇', name:'Pipistrello Stroboscopico',col:'#a6f', hp:48, atk:22, def:4, xp:90, sight:12 },
+  { ch:'👻', name:'Fantasma del VIP',     col:'#aaf', hp:80,  atk:24, def:8, xp:120, sight:10 },
+  { ch:'🦌', name:'Dahù Nero',            col:'#f60', hp:100, atk:28, def:10,xp:200, sight:10 },
+  { id:'boss', name:'Il DJ Infernale', ch:'🎧', col:'#f0f', hp:200, atk:30, def:12, xp:500, gold:100, sight:15, isBoss:true },
 ];
 
 function getBossFloor(){
-  if(G.difficulty==='hardcore') return 15;
-  if(G.difficulty==='normal')   return 12;
-  return 10; // easy
+  if(G.difficulty==='hardcore') return 25;
+  if(G.difficulty==='normal')   return 22;
+  return 20; // easy
 }
 function isBossFloor(f){ return f===getBossFloor(); }
 function isPostBoss(f){ return f>getBossFloor(); }
@@ -342,42 +352,42 @@ function isPostBoss(f){ return f>getBossFloor(); }
 //  DEFINIZIONI OGGETTI
 // ─────────────────────────────────────────
 const ITEM_POOL = [
-  { ch:'!', type:'potion', name:'Pozione di Cura',   col:'#f4f', effect:'heal',   power:20, weight:30 },
-  { ch:'!', type:'potion', name:'Pozione di Forza',  col:'#f4f', effect:'strkp',  power:3,  weight:15 },
-  { ch:'!', type:'potion', name:'Pozione di Veleno', col:'#f4f', effect:'poison', power:8,  weight:10 },
-  { ch:')', type:'weapon', name:'Daga',              col:'#aaf', effect:'weapon', power:2,  weight:25 },
-  { ch:')', type:'weapon', name:'Spada Corta',       col:'#aaf', effect:'weapon', power:4,  weight:20 },
-  { ch:')', type:'weapon', name:'Spada Lunga',       col:'#aaf', effect:'weapon', power:7,  weight:15 },
-  { ch:')', type:'weapon', name:'Ascia da Guerra',   col:'#aaf', effect:'weapon', power:10, weight:10 },
-  { ch:'[', type:'armor',  name:'Armatura di Cuoio', col:'#0af', effect:'armor',  power:2,  weight:25 },
-  { ch:'[', type:'armor',  name:'Cotta di Maglia',   col:'#0af', effect:'armor',  power:5,  weight:15 },
-  { ch:'[', type:'armor',  name:'Armatura a Piastre',col:'#0af', effect:'armor',  power:8,  weight:8  },
-  { ch:'$', type:'gold',   name:'Oro',               col:'#ff0', effect:'gold',   power:0,  weight:40 },
+  { ch:'🧪', type:'potion', name:'Pozione di Cura',   col:'#f4f', effect:'heal',   power:20, weight:30 },
+  { ch:'🧪', type:'potion', name:'Pozione di Forza',  col:'#f4f', effect:'strkp',  power:3,  weight:15 },
+  { ch:'☠️', type:'potion', name:'Pozione di Veleno', col:'#f4f', effect:'poison', power:8,  weight:10 },
+  { ch:'🗡️', type:'weapon', name:'Daga',              col:'#aaf', effect:'weapon', power:2,  weight:25 },
+  { ch:'⚔️', type:'weapon', name:'Spada Corta',       col:'#aaf', effect:'weapon', power:4,  weight:20 },
+  { ch:'⚔️', type:'weapon', name:'Spada Lunga',       col:'#aaf', effect:'weapon', power:7,  weight:15 },
+  { ch:'🪓', type:'weapon', name:'Ascia da Guerra',   col:'#aaf', effect:'weapon', power:10, weight:10 },
+  { ch:'🛡️', type:'armor',  name:'Armatura di Cuoio', col:'#0af', effect:'armor',  power:2,  weight:25 },
+  { ch:'🛡️', type:'armor',  name:'Cotta di Maglia',   col:'#0af', effect:'armor',  power:5,  weight:15 },
+  { ch:'🛡️', type:'armor',  name:'Armatura a Piastre',col:'#0af', effect:'armor',  power:8,  weight:8  },
+  { ch:'💰', type:'gold',   name:'Oro',               col:'#ff0', effect:'gold',   power:0,  weight:40 },
   // Armi a distanza
-  { ch:')', type:'weapon', name:'Arco Corto',  col:'#aff', effect:'weapon', power:0, weight:10, ranged:true, range:5 },
-  { ch:')', type:'weapon', name:'Arco Lungo',  col:'#aff', effect:'weapon', power:0, weight:7,  ranged:true, range:8 },
-  { ch:')', type:'weapon', name:'Balestra',    col:'#8ff', effect:'weapon', power:0, weight:6,  ranged:true, range:6 },
+  { ch:'🏹', type:'weapon', name:'Arco Corto',  col:'#aff', effect:'weapon', power:0, weight:10, ranged:true, range:5 },
+  { ch:'🏹', type:'weapon', name:'Arco Lungo',  col:'#aff', effect:'weapon', power:0, weight:7,  ranged:true, range:8 },
+  { ch:'🏹', type:'weapon', name:'Balestra',    col:'#8ff', effect:'weapon', power:0, weight:6,  ranged:true, range:6 },
   // Munizioni
-  { ch:'/', type:'ammo', name:'Frecce',    col:'#fa0', effect:'ammo', power:4, weight:25, qty:8,  known:true },
-  { ch:'/', type:'ammo', name:'Quadrelli', col:'#f80', effect:'ammo', power:6, weight:15, qty:5,  known:true },
+  { ch:'🎯', type:'ammo', name:'Frecce',    col:'#fa0', effect:'ammo', power:4, weight:25, qty:8,  known:true },
+  { ch:'🎯', type:'ammo', name:'Quadrelli', col:'#f80', effect:'ammo', power:6, weight:15, qty:5,  known:true },
   // Cibo (usato in tutte le difficoltà, vitale in Hardcore)
-  { ch:'%', type:'food', name:'Razione',      col:'#fa0', effect:'food', power:30, weight:15, known:true },
-  { ch:'%', type:'food', name:'Carne Secca',  col:'#f80', effect:'food', power:55, weight:10, known:true },
-  { ch:'%', type:'food', name:'Cibo Avariato',col:'#666', effect:'food', power:15, weight:20, known:true, rotten:true },
-  // Copricapi (^)
-  { id:'elmetto_cuoio',   name:'Elmetto di Cuoio',  ch:'^', color:'#a85', col:'#a85', type:'headgear', power:1, weight:8,  desc:'Un elmetto di cuoio consumato' },
-  { id:'elmetto_ferro',   name:'Elmetto di Ferro',  ch:'^', color:'#888', col:'#888', type:'headgear', power:3, weight:5,  desc:'Un robusto elmetto di ferro' },
-  { id:'cappello_mago',   name:'Cappello del Mago', ch:'^', color:'#84f', col:'#84f', type:'headgear', power:1, weight:4,  desc:'Amplifica la magia', magic:{mpRegen:1,intBonus:2} },
-  // Calzature (~)
-  { id:'stivali_cuoio',   name:'Stivali di Cuoio',  ch:'~', color:'#a85', col:'#a85', type:'footwear', power:1, weight:8,  desc:'Stivali di cuoio logori' },
-  { id:'stivali_ferro',   name:'Stivali di Ferro',  ch:'~', color:'#888', col:'#888', type:'footwear', power:2, weight:5,  desc:'Stivali di ferro pesanti' },
-  { id:'stivali_velocita',name:'Stivali della Velocità', ch:'~', color:'#4f8', col:'#4f8', type:'footwear', power:1, weight:4, desc:'Aumentano la destrezza', magic:{dexBonus:2,dodgeBonus:3} },
-  // Anelli (=)
-  { id:'anello_forza',    name:'Anello della Forza', ch:'=', color:'#f84', col:'#f84', type:'ring', power:0, weight:6, desc:'Aumenta la forza', magic:{strBonus:2} },
-  { id:'anello_guardia',  name:'Anello della Guardia', ch:'=', color:'#88f', col:'#88f', type:'ring', power:0, weight:6, desc:'Aumenta la difesa', magic:{defBonus:3} },
-  { id:'anello_vitale',   name:'Anello della Vita', ch:'=', color:'#f44', col:'#f44', type:'ring', power:0, weight:5, desc:'Rigenera HP', magic:{hpRegen:1} },
-  { id:'anello_arcano',   name:'Anello Arcano', ch:'=', color:'#f4f', col:'#f4f', type:'ring', power:0, weight:5, desc:'Rigenera MP', magic:{mpRegen:1,intBonus:1} },
-  { id:'anello_critico',  name:'Anello del Critico', ch:'=', color:'#ff4', col:'#ff4', type:'ring', power:0, weight:4, desc:'Aumenta i critici', magic:{critBonus:5,dexBonus:1} },
+  { ch:'🍖', type:'food', name:'Razione',      col:'#fa0', effect:'food', power:30, weight:15, known:true },
+  { ch:'🥩', type:'food', name:'Carne Secca',  col:'#f80', effect:'food', power:55, weight:10, known:true },
+  { ch:'🤢', type:'food', name:'Cibo Avariato',col:'#666', effect:'food', power:15, weight:20, known:true, rotten:true },
+  // Copricapi
+  { id:'elmetto_cuoio',   name:'Elmetto di Cuoio',  ch:'⛑️', color:'#a85', col:'#a85', type:'headgear', power:1, weight:8,  desc:'Un elmetto di cuoio consumato' },
+  { id:'elmetto_ferro',   name:'Elmetto di Ferro',  ch:'🪖', color:'#888', col:'#888', type:'headgear', power:3, weight:5,  desc:'Un robusto elmetto di ferro' },
+  { id:'cappello_mago',   name:'Cappello del Mago', ch:'🧙', color:'#84f', col:'#84f', type:'headgear', power:1, weight:4,  desc:'Amplifica la magia', magic:{mpRegen:1,intBonus:2} },
+  // Calzature
+  { id:'stivali_cuoio',   name:'Stivali di Cuoio',  ch:'👢', color:'#a85', col:'#a85', type:'footwear', power:1, weight:8,  desc:'Stivali di cuoio logori' },
+  { id:'stivali_ferro',   name:'Stivali di Ferro',  ch:'👢', color:'#888', col:'#888', type:'footwear', power:2, weight:5,  desc:'Stivali di ferro pesanti' },
+  { id:'stivali_velocita',name:'Stivali della Velocità', ch:'👟', color:'#4f8', col:'#4f8', type:'footwear', power:1, weight:4, desc:'Aumentano la destrezza', magic:{dexBonus:2,dodgeBonus:3} },
+  // Anelli
+  { id:'anello_forza',    name:'Anello della Forza', ch:'💍', color:'#f84', col:'#f84', type:'ring', power:0, weight:6, desc:'Aumenta la forza', magic:{strBonus:2} },
+  { id:'anello_guardia',  name:'Anello della Guardia', ch:'💍', color:'#88f', col:'#88f', type:'ring', power:0, weight:6, desc:'Aumenta la difesa', magic:{defBonus:3} },
+  { id:'anello_vitale',   name:'Anello della Vita', ch:'💍', color:'#f44', col:'#f44', type:'ring', power:0, weight:5, desc:'Rigenera HP', magic:{hpRegen:1} },
+  { id:'anello_arcano',   name:'Anello Arcano', ch:'💍', color:'#f4f', col:'#f4f', type:'ring', power:0, weight:5, desc:'Rigenera MP', magic:{mpRegen:1,intBonus:1} },
+  { id:'anello_critico',  name:'Anello del Critico', ch:'💍', color:'#ff4', col:'#ff4', type:'ring', power:0, weight:4, desc:'Aumenta i critici', magic:{critBonus:5,dexBonus:1} },
 ];
 
 const RARITY = {
@@ -1257,7 +1267,7 @@ function newGame() {
   computeFOV();
   updateCam();
   msg('Benvenuto in ITALODISCO!', '#ff6');
-  msg('Esplora il dungeon. Trova > per scendere.', '#aaa');
+  msg('Esplora i sotterranei. Trova le scale 🪜 per scendere.', '#aaa');
   loop();
 }
 
@@ -2071,7 +2081,7 @@ function dropItem(idx) {
   G.player.inv.splice(idx,1);
   item.x=G.player.x; item.y=G.player.y;
   G.items.push(item);
-  const label = item.known ? item.name : (item.ch==='!'?'Pozione misteriosa':'Oggetto');
+  const label = item.known ? item.name : (item.type==='potion'?'Pozione misteriosa':'Oggetto');
   msg(`Butti a terra: ${label}`, '#888');
   G.invOpen=false;
 }
@@ -2237,16 +2247,41 @@ function renderMap() {
       if (!isE) continue;
       const t = G.map[ty][tx];
       const {sx,sy} = toScreen(tx,ty);
-      let ch,col;
       switch(t) {
-        case TILE.WALL:   ch='#'; col=isV?PAL.wall:PAL.wallD;   break;
-        case TILE.FLOOR:  ch='.'; col=isV?PAL.floor:PAL.floorD; break;
-        case TILE.STAIRS: ch='>'; col=isV?PAL.stair:PAL.stairD; break;
-        case TILE.ANVIL:  ch='&'; col=isV?'#fa0':'#640'; break;
+        case TILE.WALL:
+          ctx.fillStyle = isV ? '#5a5a6a' : '#2a2a3a';
+          ctx.fillRect(sx, sy, TS, TS);
+          // bordo muro per dare profondità
+          ctx.fillStyle = isV ? '#7a7a8a' : '#3a3a4a';
+          ctx.fillRect(sx, sy, TS, 2);
+          ctx.fillRect(sx, sy, 2, TS);
+          ctx.fillStyle = isV ? '#3a3a4a' : '#1a1a2a';
+          ctx.fillRect(sx, sy+TS-2, TS, 2);
+          ctx.fillRect(sx+TS-2, sy, 2, TS);
+          break;
+        case TILE.FLOOR:
+          ctx.fillStyle = isV ? '#1a1a1e' : '#0e0e10';
+          ctx.fillRect(sx, sy, TS, TS);
+          // puntino sottile al centro per texture pavimento
+          ctx.fillStyle = isV ? '#2a2a30' : '#151518';
+          ctx.fillRect(sx+TS/2-1, sy+TS/2-1, 2, 2);
+          break;
+        case TILE.STAIRS:
+          ctx.fillStyle = isV ? '#1a1a1e' : '#0e0e10';
+          ctx.fillRect(sx, sy, TS, TS);
+          ctx.font = EFONT;
+          ctx.fillText('🪜', sx+2, sy+2);
+          ctx.font = FONT;
+          break;
+        case TILE.ANVIL:
+          ctx.fillStyle = isV ? '#1a1a1e' : '#0e0e10';
+          ctx.fillRect(sx, sy, TS, TS);
+          ctx.font = EFONT;
+          ctx.fillText('⚒️', sx+2, sy+2);
+          ctx.font = FONT;
+          break;
         default: continue;
       }
-      ctx.fillStyle=col;
-      ctx.fillText(ch,sx,sy);
     }
   }
 }
@@ -2256,8 +2291,11 @@ function renderItems() {
     if (!exp(item.x,item.y)) continue;
     const isV = vis(item.x,item.y);
     const {sx,sy} = toScreen(item.x,item.y);
-    ctx.fillStyle = isV ? item.col : dimColor(item.col);
-    ctx.fillText(item.ch, sx, sy);
+    if (!isV) { ctx.globalAlpha = 0.4; }
+    ctx.font = EFONT;
+    ctx.fillText(item.ch, sx+2, sy+2);
+    ctx.font = FONT;
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -2267,11 +2305,13 @@ function renderEntities() {
     const {sx,sy} = toScreen(e.x,e.y);
     // hp bar
     const bw=TS-2, hpf=e.hp/e.maxHp;
-    ctx.fillStyle='#300'; ctx.fillRect(sx,sy+TS-3,bw,2);
+    ctx.fillStyle='#300'; ctx.fillRect(sx,sy+TS-4,bw,3);
     ctx.fillStyle=hpf>0.5?'#0f0':hpf>0.25?'#ff0':'#f00';
-    ctx.fillRect(sx,sy+TS-3,Math.max(1,Math.floor(bw*hpf)),2);
-    ctx.fillStyle=e.col;
-    ctx.fillText(e.ch,sx,sy);
+    ctx.fillRect(sx,sy+TS-4,Math.max(1,Math.floor(bw*hpf)),3);
+    // emoji
+    ctx.font = EFONT;
+    ctx.fillText(e.ch, sx+2, sy+1);
+    ctx.font = FONT;
   }
 }
 
@@ -2280,17 +2320,17 @@ function renderMerchant() {
   const m = G.merchant;
   if (!vis(m.x,m.y)&&!exp(m.x,m.y)) return;
   const {sx,sy} = toScreen(m.x,m.y);
-  ctx.fillStyle = vis(m.x,m.y) ? '#f0c' : '#604';
-  ctx.font = BFONT;
-  ctx.fillText('M', sx, sy);
+  if (!vis(m.x,m.y)) { ctx.globalAlpha = 0.4; }
+  ctx.font = EFONT;
+  ctx.fillText('🧔', sx+2, sy+2);
   ctx.font = FONT;
+  ctx.globalAlpha = 1;
 }
 
 function renderPlayer() {
   const {sx,sy}=toScreen(G.player.x,G.player.y);
-  ctx.font=BFONT;
-  ctx.fillStyle=PAL.player;
-  ctx.fillText('@',sx,sy);
+  ctx.font=EFONT;
+  ctx.fillText('🕺',sx+2,sy+2);
   ctx.font=FONT;
 }
 
@@ -2480,12 +2520,12 @@ function renderInv(){
 
   // Equipment slots
   const eqSlots = [
-    { label:'Arma     [a]', item: p.weapon   },
-    { label:'Armatura [r]', item: p.armor    },
-    { label:'Copricapo[^]', item: p.headgear },
-    { label:'Calzature[~]', item: p.footwear },
-    { label:'Anello sx[=]', item: p.ring1    },
-    { label:'Anello dx[=]', item: p.ring2    },
+    { label:'⚔️ Arma     ', item: p.weapon   },
+    { label:'🛡️ Armatura ', item: p.armor    },
+    { label:'🪖 Copricapo', item: p.headgear },
+    { label:'👢 Calzature', item: p.footwear },
+    { label:'💍 Anello sx', item: p.ring1    },
+    { label:'💍 Anello dx', item: p.ring2    },
   ];
 
   ctx.font='14px monospace';
@@ -2504,7 +2544,7 @@ function renderInv(){
       if(it.cursed && !it._curseBroken) nm += ` [MALEDETTO ${it.curseCharges}]`;
       else if(it.cursed && it._curseBroken) nm += ' [liberato]';
       ctx.fillText(nm, 160, y);
-      if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 160+nm.length*8, y); }
+      if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 160+ctx.measureText(nm).width, y); }
     } else {
       ctx.fillStyle='#444'; ctx.fillText('(vuoto)', 160, y);
     }
@@ -2529,9 +2569,11 @@ function renderInv(){
     ctx.fillText(`${i+1}.`, 8, y);
     const label = it.known!==false ? it.name : 'Pozione misteriosa';
     ctx.fillStyle = it.rarityColor || (it.type==='potion'?'#f4f':it.type==='weapon'?'#f84':it.type==='armor'?'#48f': it.col||'#4f4');
-    ctx.fillText(label, 32, y);
-    if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 32+label.length*8, y); }
-    if(it.qty){ ctx.fillStyle='#888'; ctx.fillText(` x${it.qty}`, 32+label.length*8+30, y); }
+    const fullLabel = `${it.ch} ${label}`;
+    ctx.fillText(fullLabel, 32, y);
+    const tw = ctx.measureText(fullLabel).width;
+    if(it.power){ ctx.fillStyle='#aaa'; ctx.fillText(` +${it.power}`, 32+tw, y); }
+    if(it.qty){ ctx.fillStyle='#888'; ctx.fillText(` x${it.qty}`, 32+tw+(it.power?40:0), y); }
     y+=lineH;
   }
   ctx.textBaseline='alphabetic';
@@ -2555,6 +2597,35 @@ function renderInv(){
       ctx.fillText('— vuoto —', rx+26, ay);
     }
   });
+
+  // Stats panel (right column, below hotbar)
+  const statsY = 210;
+  ctx.fillStyle='#fa0'; ctx.font='bold 13px monospace';
+  ctx.fillText('── STATISTICHE ──', rx, statsY);
+  ctx.font='13px monospace';
+  const baseStr = p._baseStr !== undefined ? p._baseStr : p.str;
+  const baseDex = p._baseDex !== undefined ? p._baseDex : p.dex;
+  const baseInt = p._baseInt !== undefined ? p._baseInt : p.int;
+  const bonusStr = p.str - baseStr, bonusDex = p.dex - baseDex, bonusInt = p.int - baseInt;
+  const statLines = [
+    { label:'FOR', val:p.str, base:baseStr, bonus:bonusStr, col:'#f84' },
+    { label:'DES', val:p.dex, base:baseDex, bonus:bonusDex, col:'#8f4' },
+    { label:'INT', val:p.int, base:baseInt, bonus:bonusInt, col:'#48f' },
+    { label:'VIT', val:p.vit, base:p.vit, bonus:0, col:'#f44' },
+    { label:'VOL', val:p.wil, base:p.wil, bonus:0, col:'#c4f' },
+  ];
+  statLines.forEach((s, i) => {
+    const sy2 = statsY + 18 + i * 18;
+    ctx.fillStyle = s.col;
+    ctx.fillText(`${s.label} ${s.val}`, rx, sy2);
+    if (s.bonus > 0) { ctx.fillStyle='#0f8'; ctx.fillText(` (+${s.bonus})`, rx+56, sy2); }
+  });
+  const sy3 = statsY + 18 + statLines.length * 18 + 8;
+  ctx.fillStyle='#888'; ctx.font='12px monospace';
+  ctx.fillText(`HP ${p.hp}/${p.maxHp}  MP ${p.mp}/${p.maxMp}`, rx, sy3);
+  ctx.fillText(`ATK ${p.atk}  DEF ${p.def}`, rx, sy3+16);
+  ctx.fillText(`CRIT ${Math.floor(p.critPct)}%  SCHIV ${Math.floor(p.dodgePct)}%`, rx, sy3+32);
+  ctx.fillText(`Oro: ${p.gold}  Lv: ${p.lv}`, rx, sy3+48);
 
   // Footer
   y = H-48;
@@ -2651,7 +2722,7 @@ function renderShop() {
       ctx.fillStyle = isCursor ? '#ff6' : '#555';
       ctx.fillText('►', 36, 88+i*20);
       ctx.fillStyle = canBuy ? (isCursor ? '#fff' : item.col) : '#888';
-      ctx.fillText(`${item.ch}  ${item.name}`, 50, 88 + i*20);
+      ctx.fillText(`${item.ch} ${item.name}`, 50, 88 + i*20);
       ctx.fillStyle = canBuy ? '#ff0' : '#888';
       ctx.fillText(`${item.price} oro`, 280, 88 + i*20);
       const rangedInfo = item.ranged ? ` [Arco R:${item.range}]` : '';
@@ -2671,7 +2742,7 @@ function renderShop() {
       ctx.fillStyle = isCursor ? '#ff6' : '#555';
       ctx.fillText('►', 36, 88+i*20);
       ctx.fillStyle = isCursor ? '#fff' : item.col;
-      ctx.fillText(`${item.ch}  ${label}`, 50, 88 + i*20);
+      ctx.fillText(`${item.ch} ${label}`, 50, 88 + i*20);
       ctx.fillStyle='#ff0';
       ctx.fillText(`→ ${sellPrice} oro`, 280, 88 + i*20);
     });
@@ -3138,9 +3209,9 @@ document.addEventListener('keydown', e=>{
   // Level up stat screen
   if (G.lvlUp>0) {
     const p=G.player;
-    if (e.key==='1') { p.str++; spendPt(); }
-    else if (e.key==='2') { p.dex++; spendPt(); }
-    else if (e.key==='3') { p.int++; spendPt(); }
+    if (e.key==='1') { p.str++; if(p._baseStr!==undefined) p._baseStr++; spendPt(); }
+    else if (e.key==='2') { p.dex++; if(p._baseDex!==undefined) p._baseDex++; spendPt(); }
+    else if (e.key==='3') { p.int++; if(p._baseInt!==undefined) p._baseInt++; spendPt(); }
     else if (e.key==='4') { p.vit++; spendPt(); }
     else if (e.key==='5') { p.wil++; spendPt(); }
     recalcStats();
@@ -3449,17 +3520,18 @@ function renderTitle() {
 
   ctx.font=`bold ${Math.round(13*sc)}px Courier New`;
   ctx.fillStyle='#f0c';
-  ctx.fillText('— La vera storia di Italo Discobolo —', cw, y); y+=Math.round(24*sc);
+  ctx.fillText('— La vera storia di Italo Disco —', cw, y); y+=Math.round(24*sc);
 
   const story = [
-    { text: 'Sei Italo. Stavi cercando il bagno al Megadisco Infernale', col: '#ccc' },
-    { text: 'quando hai aperto una porta con scritto "NON APRIRE".', col: '#ccc' },
+    { text: 'Sei Italo. Sabato notte al Megadisco Infernale.', col: '#ccc' },
+    { text: 'Due Spritz. Dovevi solo trovare il bagno.', col: '#ccc' },
+    { text: 'Hai aperto la porta con scritto "NON APRIRE".', col: '#ccc' },
     { text: '', col: '#000' },
-    { text: 'Ora sei in un dungeon. Il DJ ride di te.', col: '#fa0' },
-    { text: 'Le tue ultime monete tintinnano in tasca.', col: '#fa0' },
-    { text: 'La musica si sente ancora, lontana.', col: '#888' },
+    { text: 'Ora sei nei sotterranei della discoteca.', col: '#fa0' },
+    { text: 'Ratti Maranza, Paninari impazziti e Buttafuori ovunque.', col: '#fa0' },
+    { text: 'Il DJ ride dal suo trono. La cassa dritta rimbomba.', col: '#fa0' },
     { text: '', col: '#000' },
-    { text: '👟  Trova la via d\'uscita.', col: '#0f8' },
+    { text: '🕺  Risali in pista o muori provandoci.', col: '#0f8' },
   ];
   const storyLH = Math.round(16*sc);
   ctx.font=`${Math.round(12*sc)}px Courier New`;
@@ -3479,21 +3551,21 @@ function renderTitle() {
   ctx.fillText('[1] Facile', cw, y); y+=Math.round(14*sc);
   ctx.font=`${Math.round(10*sc)}px Courier New`;
   ctx.fillStyle='#6a6';
-  ctx.fillText('HP e MP si rigenerano lentamente', cw, y); y+=optLH;
+  ctx.fillText('regen lenta — Italo regge ancora l\'alcol', cw, y); y+=optLH;
 
   ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
   ctx.fillStyle='#ff6';
   ctx.fillText('[2] Normale', cw, y); y+=Math.round(14*sc);
   ctx.font=`${Math.round(10*sc)}px Courier New`;
   ctx.fillStyle='#aa8';
-  ctx.fillText('roguelike classico — nessuna regen', cw, y); y+=optLH;
+  ctx.fillText('nessuna regen — i Spritz sono finiti', cw, y); y+=optLH;
 
   ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
   ctx.fillStyle='#f44';
   ctx.fillText('[3] Hardcore', cw, y); y+=Math.round(14*sc);
   ctx.font=`${Math.round(10*sc)}px Courier New`;
   ctx.fillStyle='#a44';
-  ctx.fillText('fame + nessuna regen — Italo soffre davvero', cw, y); y+=optLH;
+  ctx.fillText('fame + nessuna regen — Italo non ce la fa più', cw, y); y+=optLH;
 
   if (hasSave()) {
     ctx.font=`bold ${Math.round(14*sc)}px Courier New`;
